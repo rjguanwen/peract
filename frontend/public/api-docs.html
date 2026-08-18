@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>任务管理系统 · API 文档</title>
+<style>
+  :root {
+    --bg: #f6f8fa;
+    --card: #ffffff;
+    --border: #e5e7eb;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --primary: #2563eb;
+    --green: #059669;
+    --red: #dc2626;
+    --amber: #d97706;
+    --code-bg: #1e293b;
+    --code-text: #e2e8f0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+      'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 240px;
+    background: #111827;
+    color: #d1d5db;
+    padding: 20px 0;
+    overflow-y: auto;
+  }
+  .sidebar .brand {
+    padding: 0 20px 16px;
+    border-bottom: 1px solid #1f2937;
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sidebar .nav-group {
+    padding: 14px 20px 4px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #6b7280;
+  }
+  .sidebar a {
+    display: block;
+    padding: 7px 20px;
+    color: #d1d5db;
+    text-decoration: none;
+    font-size: 13.5px;
+    border-left: 3px solid transparent;
+    transition: all .15s;
+  }
+  .sidebar a:hover { background: #1f2937; color: #fff; }
+  .sidebar a.active { border-left-color: var(--primary); background: #1e3a8a33; color: #93c5fd; }
+  .main {
+    margin-left: 240px;
+    padding: 32px 40px;
+    max-width: 1000px;
+  }
+  h1 { font-size: 28px; margin-bottom: 6px; }
+  .subtitle { color: var(--muted); margin-bottom: 28px; font-size: 14px; }
+  h2 {
+    font-size: 22px;
+    margin: 40px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--border);
+  }
+  h3 { font-size: 16px; margin: 24px 0 10px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .api-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .method {
+    font-size: 12px;
+    font-weight: 700;
+    color: #fff;
+    padding: 3px 10px;
+    border-radius: 4px;
+    min-width: 64px;
+    text-align: center;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+  .method.get { background: var(--green); }
+  .method.post { background: var(--primary); }
+  .method.patch { background: var(--amber); }
+  .method.delete { background: var(--red); }
+  .path {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 15px;
+    font-weight: 600;
+    word-break: break-all;
+  }
+  .desc { color: var(--muted); font-size: 13.5px; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #4338ca; }
+  .tag.auth { background: #fef3c7; color: #92400e; }
+  .tag.admin { background: #fee2e2; color: #991b1b; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    margin: 8px 0 4px;
+  }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { background: #f9fafb; font-weight: 600; white-space: nowrap; }
+  td code, .type { font-family: 'SF Mono', Consolas, monospace; font-size: 12.5px; background: #f3f4f6; padding: 1px 6px; border-radius: 4px; }
+  .req { color: var(--primary); font-size: 12px; font-weight: 600; }
+  .opt { color: var(--muted); font-size: 12px; }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-text);
+    padding: 14px 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 12.5px;
+    font-family: 'SF Mono', Consolas, monospace;
+    line-height: 1.5;
+    margin: 8px 0;
+  }
+  pre .key { color: #93c5fd; }
+  pre .str { color: #86efac; }
+  pre .num { color: #fca5a5; }
+  .note { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin: 8px 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) {
+    .sidebar { position: static; width: 100%; }
+    .main { margin-left: 0; padding: 20px; }
+    .grid2 { grid-template-columns: 1fr; }
+  }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+  .badge.status { background: #ecfdf5; color: #047857; }
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="brand">📋 任务管理系统</div>
+  <div class="nav-group">概览</div>
+  <a href="#overview" class="active">系统说明</a>
+  <a href="#auth">认证接口</a>
+  <a href="#users">用户接口</a>
+  <a href="#tasks">任务接口</a>
+  <a href="#reminders">提醒接口</a>
+  <a href="#stats">统计接口</a>
+  <div class="nav-group">数据结构</div>
+  <a href="#d-user">User 用户</a>
+  <a href="#d-task">Task 任务</a>
+  <a href="#d-progress">TaskProgress 进展</a>
+  <a href="#d-reminder">Reminder 提醒</a>
+  <a href="#d-enum">枚举值</a>
+  <a href="#d-common">通用说明</a>
+</nav>
+
+<main class="main">
+
+  <h1>API 文档</h1>
+  <div class="subtitle">任务管理系统 · Go 后端（Gin）· 基础地址 <code>http://localhost:8001/api/v1</code></div>
+
+  <h2 id="overview">系统说明</h2>
+  <div class="card">
+    <p>本系统后端基于 <b>Go + Gin + GORM + SQLite</b>，提供任务登记、分配、进展跟踪、状态查询、提醒、回收站等功能。</p>
+    <ul style="margin:12px 0 0 18px; font-size:13.5px; color:var(--muted);">
+      <li>除登录/注册外，所有接口均需 <code>Authorization: Bearer &lt;token&gt;</code> 请求头。</li>
+      <li>登录接口使用 OAuth2 Password 模式（<code>application/x-www-form-urlencoded</code>）。</li>
+      <li>错误响应统一格式：<code>{"detail": "错误信息"}</code>。</li>
+      <li>时间字段格式：<code>2026-08-20T18:00:00</code>（本地时间，无时区）。</li>
+    </ul>
+  </div>
+
+  <h2 id="auth">认证接口</h2>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/auth/login</span></div>
+    <div class="desc">用户登录，返回 JWT 访问令牌。请求体为表单格式（非 JSON）。</div>
+    <table>
+      <tr><th>参数</th><th>位置</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>username</code></td><td>Form</td><td class="type">string</td><td class="req">是</td><td>用户名</td></tr>
+      <tr><td><code>password</code></td><td>Form</td><td class="type">string</td><td class="req">是</td><td>密码</td></tr>
+    </table>
+    <h3>响应 200</h3>
+<pre><span class="key">{
+  "access_token"</span>: <span class="str">"eyJhbGciOiJIUzI1NiIs..."</span>,
+  <span class="key">"token_type"</span>: <span class="str">"bearer"</span>,
+  <span class="key">"user"</span>: { <span class="str">"id"</span>: <span class="num">1</span>, <span class="str">"username"</span>: <span class="str">"admin"</span>, ... }
+}</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/auth/register</span></div>
+    <div class="desc">注册新用户（角色固定为普通用户）。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>username</code></td><td class="type">string</td><td class="req">是</td><td>2-64 位，字母/数字/下划线/点/横线</td></tr>
+      <tr><td><code>email</code></td><td class="type">string</td><td class="req">是</td><td>合法邮箱</td></tr>
+      <tr><td><code>password</code></td><td class="type">string</td><td class="req">是</td><td>至少 6 位</td></tr>
+      <tr><td><code>full_name</code></td><td class="type">string</td><td class="opt">否</td><td>姓名</td></tr>
+      <tr><td><code>role</code></td><td class="type">string</td><td class="opt">否</td><td>忽略，固定为 user</td></tr>
+    </table>
+    <h3>响应 201</h3>
+    <pre>{ <span class="str">"id"</span>: <span class="num">2</span>, <span class="str">"username"</span>: <span class="str">"user1"</span>, <span class="str">"email"</span>: <span class="str">"..."</span>, <span class="str">"role"</span>: <span class="str">"user"</span>, ... }</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/auth/me</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">获取当前登录用户信息。</div>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"id"</span>: <span class="num">1</span>, <span class="str">"username"</span>: <span class="str">"admin"</span>, <span class="str">"role"</span>: <span class="str">"admin"</span>, <span class="str">"is_active"</span>: <span class="key">true</span>, ... }</pre>
+  </div>
+
+  <h2 id="users">用户接口</h2>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/users</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">获取全部用户列表（用于任务分配选择）。</div>
+    <h3>响应 200</h3>
+    <pre>[ { <span class="str">"id"</span>: <span class="num">1</span>, <span class="str">"username"</span>: <span class="str">"admin"</span>, <span class="str">"role"</span>: <span class="str">"admin"</span>, ... }, ... ]</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/users</span> <span class="tag admin">仅管理员</span></div>
+    <div class="desc">创建用户。请求体同 <code>/auth/register</code>，但 <code>role</code> 可为 <code>user</code>/<code>admin</code>。</div>
+    <h3>响应 201</h3>
+    <pre>{ <span class="str">"id"</span>: <span class="num">3</span>, <span class="str">"username"</span>: <span class="str">"zhangsan"</span>, <span class="str">"role"</span>: <span class="str">"user"</span>, ... }</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method patch">PATCH</span><span class="path">/users/:id</span> <span class="tag admin">仅管理员</span></div>
+    <div class="desc">更新用户（全字段可选，仅传需修改字段）。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>full_name</code></td><td class="type">string</td><td class="opt">否</td><td>姓名</td></tr>
+      <tr><td><code>email</code></td><td class="type">string</td><td class="opt">否</td><td>邮箱</td></tr>
+      <tr><td><code>role</code></td><td class="type">string</td><td class="opt">否</td><td>user / admin</td></tr>
+      <tr><td><code>password</code></td><td class="type">string</td><td class="opt">否</td><td>新密码（留空不修改）</td></tr>
+      <tr><td><code>is_active</code></td><td class="type">boolean</td><td class="opt">否</td><td>启用/停用</td></tr>
+    </table>
+  </div>
+
+  <h2 id="tasks">任务接口</h2>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/tasks</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">创建任务（登记）。创建后自动在进展时间线记录「created」。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>title</code></td><td class="type">string</td><td class="req">是</td><td>任务标题</td></tr>
+      <tr><td><code>description</code></td><td class="type">string</td><td class="opt">否</td><td>任务描述</td></tr>
+      <tr><td><code>priority</code></td><td class="type">string</td><td class="opt">否</td><td>low / medium / high / urgent，默认 medium</td></tr>
+      <tr><td><code>assignee_id</code></td><td class="type">integer</td><td class="opt">否</td><td>负责人用户 ID</td></tr>
+      <tr><td><code>due_date</code></td><td class="type">string</td><td class="opt">否</td><td>截止时间 <code>2026-08-20T18:00:00</code></td></tr>
+    </table>
+    <h3>响应 201</h3>
+    <pre>{ <span class="str">"id"</span>: <span class="num">10</span>, <span class="str">"title"</span>: <span class="str">"..."</span>, <span class="str">"status"</span>: <span class="str">"todo"</span>, <span class="str">"progress"</span>: <span class="num">0</span>, ... }</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/tasks</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">任务列表，支持组合筛选与分页。</div>
+    <table>
+      <tr><th>参数</th><th>位置</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>status</code></td><td>Query</td><td class="type">string</td><td>todo / in_progress / done</td></tr>
+      <tr><td><code>priority</code></td><td>Query</td><td class="type">string</td><td>low / medium / high / urgent</td></tr>
+      <tr><td><code>assignee_id</code></td><td>Query</td><td class="type">integer</td><td>负责人 ID</td></tr>
+      <tr><td><code>keyword</code></td><td>Query</td><td class="type">string</td><td>标题/描述模糊搜索</td></tr>
+      <tr><td><code>overdue_only</code></td><td>Query</td><td class="type">boolean</td><td>只看逾期（<code>true</code>）</td></tr>
+      <tr><td><code>mine</code></td><td>Query</td><td class="type">boolean</td><td>只看我的任务（<code>true</code>）</td></tr>
+      <tr><td><code>page</code></td><td>Query</td><td class="type">integer</td><td>页码，默认 1</td></tr>
+      <tr><td><code>page_size</code></td><td>Query</td><td class="type">integer</td><td>每页条数，默认 20，最大 100</td></tr>
+    </table>
+    <h3>响应 200</h3>
+<pre><span class="key">{
+  "items"</span>: [ { <span class="str">"id"</span>: <span class="num">10</span>, <span class="str">"status"</span>: <span class="str">"todo"</span>, ... } ],
+  <span class="key">"total"</span>: <span class="num">42</span>,
+  <span class="key">"page"</span>: <span class="num">1</span>,
+  <span class="key">"page_size"</span>: <span class="num">20</span>
+}</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/tasks/deleted</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">回收站：已逻辑删除的任务。管理员可见全部；普通用户仅可见自己创建的任务。</div>
+    <table>
+      <tr><th>参数</th><th>位置</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>priority</code></td><td>Query</td><td class="type">string</td><td>按优先级筛选</td></tr>
+      <tr><td><code>keyword</code></td><td>Query</td><td class="type">string</td><td>标题/描述模糊搜索</td></tr>
+      <tr><td><code>page</code> / <code>page_size</code></td><td>Query</td><td class="type">integer</td><td>分页参数</td></tr>
+    </table>
+    <div class="note">响应结构与 <code>GET /tasks</code> 相同；每条记录包含 <code>deleted_at</code> 删除时间。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/tasks/:id</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">任务详情，包含完整字段与进展时间线 <code>progresses</code>。</div>
+    <h3>响应 200</h3>
+<pre><span class="key">{
+  "id"</span>: <span class="num">10</span>,
+  <span class="key">"title"</span>: <span class="str">"..."</span>,
+  <span class="key">"status"</span>: <span class="str">"in_progress"</span>,
+  <span class="key">"progress"</span>: <span class="num">60</span>,
+  <span class="key">"is_overdue"</span>: <span class="key">false</span>,
+  <span class="key">"progresses"</span>: [ { <span class="str">"action"</span>: <span class="str">"status_changed"</span>, ... } ]
+}</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method patch">PATCH</span><span class="path">/tasks/:id</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">
+      更新任务。权限规则：
+      <b>编辑基本信息</b>（title / description / priority / assignee_id / due_date）仅限<b>管理员或任务创建者</b>；
+      <b>状态/进度流转</b>（status / progress）允许负责人操作。
+    </div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>title</code></td><td class="type">string</td><td>标题（仅管理员/创建者）</td></tr>
+      <tr><td><code>description</code></td><td class="type">string</td><td>描述（仅管理员/创建者）</td></tr>
+      <tr><td><code>priority</code></td><td class="type">string</td><td>优先级（仅管理员/创建者）</td></tr>
+      <tr><td><code>assignee_id</code></td><td class="type">integer</td><td>负责人（仅管理员/创建者）</td></tr>
+      <tr><td><code>due_date</code></td><td class="type">string</td><td>截止时间（仅管理员/创建者）</td></tr>
+      <tr><td><code>status</code></td><td class="type">string</td><td>状态流转（负责人可操作）</td></tr>
+      <tr><td><code>progress</code></td><td class="type">integer</td><td>进度 0-100，达 100 自动完成（负责人可操作）</td></tr>
+    </table>
+    <div class="note">状态/进度变更会自动记录到进展时间线，并通知负责人。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method delete">DELETE</span><span class="path">/tasks/:id</span> <span class="tag auth">需登录</span></div>
+    <div class="desc"><b>仅管理员或任务创建者</b>。逻辑删除：写入 <code>deleted_at</code>，可在回收站恢复。</div>
+    <h3>响应 204</h3>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/tasks/:id/restore</span> <span class="tag auth">需登录</span></div>
+    <div class="desc"><b>仅管理员或任务创建者</b>。恢复已删除任务，返回恢复后的任务对象。</div>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"id"</span>: <span class="num">10</span>, <span class="str">"deleted_at"</span>: <span class="key">null</span>, ... }</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/tasks/:id/progress</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">添加进展记录（创建者/负责人/管理员可操作）。三个分支三选一。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>status</code></td><td class="type">string</td><td>新状态（传递则记录状态变更）</td></tr>
+      <tr><td><code>progress</code></td><td class="type">integer</td><td>进度 0-100（传递则记录进度更新，达 100 自动完成）</td></tr>
+      <tr><td><code>comment</code></td><td class="type">string</td><td>备注说明</td></tr>
+    </table>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"id"</span>: <span class="num">5</span>, <span class="str">"action"</span>: <span class="str">"progress_updated"</span>, <span class="str">"progress"</span>: <span class="num">60</span>, ... }</pre>
+  </div>
+
+  <h2 id="reminders">提醒接口</h2>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/reminders</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">当前用户的提醒/通知列表。</div>
+    <table>
+      <tr><th>参数</th><th>位置</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>unread_only</code></td><td>Query</td><td class="type">boolean</td><td>只看未读（<code>true</code>）</td></tr>
+      <tr><td><code>page</code> / <code>page_size</code></td><td>Query</td><td class="type">integer</td><td>分页参数</td></tr>
+    </table>
+    <h3>响应 200</h3>
+<pre><span class="key">{
+  "items"</span>: [ { <span class="str">"id"</span>: <span class="num">1</span>, <span class="str">"task_title"</span>: <span class="str">"..."</span>, <span class="str">"remind_type"</span>: <span class="str">"overdue"</span>, <span class="str">"read_at"</span>: <span class="key">null</span>, ... } ],
+  <span class="key">"total"</span>: <span class="num">3</span>, <span class="key">"page"</span>: <span class="num">1</span>, <span class="key">"page_size"</span>: <span class="num">20</span>
+}</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/reminders/unread-count</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">未读提醒数量（顶部铃铛角标）。</div>
+    <h3>响应 200</h3>
+    <pre><span class="num">3</span></pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/reminders</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">设置任务提醒（创建者/负责人/管理员可操作）。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>task_id</code></td><td class="type">integer</td><td class="req">是</td><td>任务 ID</td></tr>
+      <tr><td><code>remind_at</code></td><td class="type">string</td><td class="req">是</td><td>提醒时间 <code>2026-08-15T10:00:00</code></td></tr>
+      <tr><td><code>message</code></td><td class="type">string</td><td class="opt">否</td><td>提醒内容</td></tr>
+      <tr><td><code>remind_type</code></td><td class="type">string</td><td class="opt">否</td><td>manual / overdue / assign / status，默认 manual</td></tr>
+    </table>
+    <h3>响应 201</h3>
+    <pre>{ <span class="str">"id"</span>: <span class="num">4</span>, <span class="str">"task_id"</span>: <span class="num">10</span>, <span class="str">"remind_at"</span>: <span class="str">"2026-08-15T10:00:00"</span>, ... }</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/reminders/:id/read</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">标记提醒为已读（本人或管理员）。</div>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"id"</span>: <span class="num">4</span>, <span class="str">"read_at"</span>: <span class="str">"2026-08-14T14:00:00"</span>, ... }</pre>
+  </div>
+
+  <h2 id="stats">统计接口</h2>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/stats/overview</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">仪表盘统计汇总。</div>
+    <h3>响应 200</h3>
+<pre><span class="key">{
+  "total"</span>: <span class="num">42</span>,
+  <span class="key">"todo"</span>: <span class="num">10</span>,
+  <span class="key">"in_progress"</span>: <span class="num">8</span>,
+  <span class="key">"done"</span>: <span class="num">24</span>,
+  <span class="key">"overdue"</span>: <span class="num">3</span>,
+  <span class="key">"mine_pending"</span>: <span class="num">5</span>,
+  <span class="key">"mine_overdue"</span>: <span class="num">1</span>,
+  <span class="key">"priority_dist"</span>: { <span class="str">"low"</span>: <span class="num">5</span>, <span class="str">"medium"</span>: <span class="num">20</span>, <span class="str">"high"</span>: <span class="num">12</span>, <span class="str">"urgent"</span>: <span class="num">5</span> }
+}</pre>
+  </div>
+
+  <h2 id="d-user">数据结构 · User 用户</h2>
+  <div class="card">
+    <table>
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>id</code></td><td class="type">integer</td><td>用户 ID</td></tr>
+      <tr><td><code>username</code></td><td class="type">string</td><td>用户名</td></tr>
+      <tr><td><code>email</code></td><td class="type">string</td><td>邮箱</td></tr>
+      <tr><td><code>full_name</code></td><td class="type">string</td><td>姓名</td></tr>
+      <tr><td><code>role</code></td><td class="type">string</td><td><code>admin</code> / <code>user</code></td></tr>
+      <tr><td><code>is_active</code></td><td class="type">boolean</td><td>是否启用</td></tr>
+      <tr><td><code>created_at</code></td><td class="type">string</td><td>创建时间</td></tr>
+    </table>
+  </div>
+
+  <h2 id="d-task">数据结构 · Task 任务</h2>
+  <div class="card">
+    <table>
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>id</code></td><td class="type">integer</td><td>任务 ID</td></tr>
+      <tr><td><code>title</code></td><td class="type">string</td><td>标题</td></tr>
+      <tr><td><code>description</code></td><td class="type">string</td><td>描述</td></tr>
+      <tr><td><code>status</code></td><td class="type">string</td><td>todo / in_progress / done</td></tr>
+      <tr><td><code>priority</code></td><td class="type">string</td><td>low / medium / high / urgent</td></tr>
+      <tr><td><code>assignee_id</code></td><td class="type">integer</td><td>负责人 ID，可为 null</td></tr>
+      <tr><td><code>assignee_name</code></td><td class="type">string</td><td>负责人姓名（冗余展示）</td></tr>
+      <tr><td><code>creator_id</code></td><td class="type">integer</td><td>创建者 ID</td></tr>
+      <tr><td><code>creator_name</code></td><td class="type">string</td><td>创建者姓名（冗余展示）</td></tr>
+      <tr><td><code>due_date</code></td><td class="type">string</td><td>截止时间，可为 null</td></tr>
+      <tr><td><code>progress</code></td><td class="type">integer</td><td>进度百分比 0-100</td></tr>
+      <tr><td><code>is_overdue</code></td><td class="type">boolean</td><td>是否逾期（计算字段）</td></tr>
+      <tr><td><code>created_at</code></td><td class="type">string</td><td>创建时间</td></tr>
+      <tr><td><code>updated_at</code></td><td class="type">string</td><td>更新时间</td></tr>
+      <tr><td><code>deleted_at</code></td><td class="type">string</td><td>删除时间（逻辑删除），未删除为 null</td></tr>
+    </table>
+    <div class="note">任务详情（<code>GET /tasks/:id</code>）额外包含 <code>progresses: TaskProgress[]</code> 进展数组。</div>
+  </div>
+
+  <h2 id="d-progress">数据结构 · TaskProgress 进展</h2>
+  <div class="card">
+    <table>
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>id</code></td><td class="type">integer</td><td>记录 ID</td></tr>
+      <tr><td><code>task_id</code></td><td class="type">integer</td><td>所属任务 ID</td></tr>
+      <tr><td><code>user_id</code></td><td class="type">integer</td><td>操作人 ID</td></tr>
+      <tr><td><code>user_name</code></td><td class="type">string</td><td>操作人姓名</td></tr>
+      <tr><td><code>action</code></td><td class="type">string</td><td>created / assigned / status_changed / progress_updated / comment</td></tr>
+      <tr><td><code>comment</code></td><td class="type">string</td><td>备注</td></tr>
+      <tr><td><code>old_status</code></td><td class="type">string</td><td>原状态</td></tr>
+      <tr><td><code>new_status</code></td><td class="type">string</td><td>新状态</td></tr>
+      <tr><td><code>progress</code></td><td class="type">integer</td><td>进度快照</td></tr>
+      <tr><td><code>created_at</code></td><td class="type">string</td><td>记录时间</td></tr>
+    </table>
+  </div>
+
+  <h2 id="d-reminder">数据结构 · Reminder 提醒</h2>
+  <div class="card">
+    <table>
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>id</code></td><td class="type">integer</td><td>提醒 ID</td></tr>
+      <tr><td><code>task_id</code></td><td class="type">integer</td><td>关联任务 ID</td></tr>
+      <tr><td><code>task_title</code></td><td class="type">string</td><td>任务标题（冗余展示）</td></tr>
+      <tr><td><code>user_id</code></td><td class="type">integer</td><td>接收人 ID</td></tr>
+      <tr><td><code>remind_at</code></td><td class="type">string</td><td>提醒时间</td></tr>
+      <tr><td><code>remind_type</code></td><td class="type">string</td><td>manual / overdue / assign / status</td></tr>
+      <tr><td><code>message</code></td><td class="type">string</td><td>提醒内容</td></tr>
+      <tr><td><code>sent</code></td><td class="type">boolean</td><td>是否已推送外部通知</td></tr>
+      <tr><td><code>read_at</code></td><td class="type">string</td><td>已读时间，未读为 null</td></tr>
+      <tr><td><code>created_at</code></td><td class="type">string</td><td>创建时间</td></tr>
+    </table>
+  </div>
+
+  <h2 id="d-enum">枚举值</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>任务状态 status</h3>
+      <table>
+        <tr><th>值</th><th>说明</th></tr>
+        <tr><td><code>todo</code></td><td>待处理</td></tr>
+        <tr><td><code>in_progress</code></td><td>进行中</td></tr>
+        <tr><td><code>done</code></td><td>已完成</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>优先级 priority</h3>
+      <table>
+        <tr><th>值</th><th>说明</th></tr>
+        <tr><td><code>low</code></td><td>低</td></tr>
+        <tr><td><code>medium</code></td><td>中</td></tr>
+        <tr><td><code>high</code></td><td>高</td></tr>
+        <tr><td><code>urgent</code></td><td>紧急</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>进展动作 action</h3>
+      <table>
+        <tr><th>值</th><th>说明</th></tr>
+        <tr><td><code>created</code></td><td>创建任务</td></tr>
+        <tr><td><code>assigned</code></td><td>任务分配</td></tr>
+        <tr><td><code>status_changed</code></td><td>状态变更</td></tr>
+        <tr><td><code>progress_updated</code></td><td>进度更新</td></tr>
+        <tr><td><code>comment</code></td><td>进展备注</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>提醒类型 remind_type</h3>
+      <table>
+        <tr><th>值</th><th>说明</th></tr>
+        <tr><td><code>manual</code></td><td>手动提醒</td></tr>
+        <tr><td><code>overdue</code></td><td>逾期提醒</td></tr>
+        <tr><td><code>assign</code></td><td>任务分配</td></tr>
+        <tr><td><code>status</code></td><td>状态变更</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2 id="d-common">通用说明</h2>
+  <div class="card">
+    <h3>鉴权</h3>
+    <p>除 <code>POST /auth/login</code> 与 <code>POST /auth/register</code> 外，所有接口需携带请求头：</p>
+    <pre>Authorization: Bearer &lt;access_token&gt;</pre>
+    <h3>错误响应</h3>
+    <p>统一格式（HTTP 状态码对应语义）：</p>
+    <pre>{ <span class="str">"detail"</span>: <span class="str">"错误描述"</span> }</pre>
+    <table>
+      <tr><th>状态码</th><th>含义</th></tr>
+      <tr><td><code>400</code></td><td>参数不合法</td></tr>
+      <tr><td><code>401</code></td><td>未认证 / 凭证无效</td></tr>
+      <tr><td><code>403</code></td><td>无权限</td></tr>
+      <tr><td><code>404</code></td><td>资源不存在</td></tr>
+      <tr><td><code>500</code></td><td>服务器内部错误</td></tr>
+    </table>
+    <h3>权限模型</h3>
+    <table>
+      <tr><th>操作</th><th>管理员</th><th>创建者</th><th>负责人</th><th>普通用户</th></tr>
+      <tr><td>查看任务</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+      <tr><td>创建任务</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+      <tr><td>编辑任务信息</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td></tr>
+      <tr><td>状态/进度流转</td><td>✅</td><td>✅</td><td>✅</td><td>❌</td></tr>
+      <tr><td>添加进展</td><td>✅</td><td>✅</td><td>✅</td><td>❌</td></tr>
+      <tr><td>删除任务</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td></tr>
+      <tr><td>恢复任务</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td></tr>
+      <tr><td>用户管理</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td></tr>
+    </table>
+    <h3>说明</h3>
+    <ul style="margin-left:18px; font-size:13.5px; color:var(--muted);">
+      <li>删除为<b>逻辑删除</b>，数据保留，可在回收站恢复。</li>
+      <li>定时任务：每 30 秒扫描到期提醒并推送；每 10 分钟检查逾期任务生成提醒（每天一条）。</li>
+      <li>外部通知（Webhook / 邮件）为可选项，未配置则仅站内提醒。</li>
+    </ul>
+  </div>
+
+</main>
+
+<script>
+  // 侧边栏高亮跟随滚动
+  const links = document.querySelectorAll('.sidebar a')
+  const sections = [...document.querySelectorAll('h2')].map(h => h.id)
+  window.addEventListener('scroll', () => {
+    let current = 'overview'
+    for (const id of sections) {
+      const el = document.getElementById(id)
+      if (el && el.getBoundingClientRect().top <= 90) current = id
+    }
+    links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + current))
+  })
+</script>
+</body>
+</html>

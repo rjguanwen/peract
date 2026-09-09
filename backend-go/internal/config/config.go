@@ -25,6 +25,7 @@ type Config struct {
 	SMTPUser          string
 	SMTPPassword      string
 	SMTPFrom          string
+	SMTPFromName      string
 	SMTPUseTLS        bool
 
 	AdminUsername string
@@ -58,9 +59,11 @@ func Load() *Config {
 		SMTPHost:          getEnv("SMTP_HOST", ""),
 		SMTPPort:          getEnvInt("SMTP_PORT", 465),
 		SMTPUser:          getEnv("SMTP_USER", ""),
-		SMTPPassword:      getEnv("SMTP_PASSWORD", ""),
-		SMTPFrom:          getEnv("SMTP_FROM", ""),
-		SMTPUseTLS:        getEnvBool("SMTP_USE_TLS", true),
+		// 兼容两种密码键名：SMTP_PASSWORD 优先，其次 SMTP_PASS（与飞光/其他项目一致）
+		SMTPPassword: getEnv("SMTP_PASSWORD", getEnv("SMTP_PASS", "")),
+		SMTPFrom:     getEnv("SMTP_FROM", ""),
+		SMTPFromName: getEnv("SMTP_FROM_NAME", "躬行"),
+		SMTPUseTLS:   getEnvBool("SMTP_USE_TLS", true),
 
 		AdminUsername: getEnv("INIT_ADMIN_USERNAME", "admin"),
 		AdminPassword: getEnv("INIT_ADMIN_PASSWORD", "admin123"),

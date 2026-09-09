@@ -220,7 +220,7 @@ func (h *Handler) CreateInvites(c *gin.Context) {
 			} else {
 				h.db.Delete(&model.Invitation{}, "token = ?", token)
 			}
-			res["reason"] = "邮件发送失败，请检查 SMTP 配置"
+			res["reason"] = "邮件发送失败：" + err.Error()
 			results = append(results, res)
 			continue
 		}

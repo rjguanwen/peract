@@ -32,3 +32,4 @@ dist/
 
 # 编写生成的可执行文件
 *.exe
+task-mcp/task-mcp.exe

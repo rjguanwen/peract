@@ -2,8 +2,11 @@
   <el-container class="layout">
     <el-aside width="220px" class="aside">
       <div class="logo">
-        <el-icon :size="22"><List /></el-icon>
-        <span>任务管理系统</span>
+        <LogoMark :size="26" />
+        <div class="logo-text">
+          <span class="logo-name">躬行</span>
+          <span class="logo-en">Peract</span>
+        </div>
       </div>
       <el-menu
         :default-active="activeMenu"
@@ -72,6 +75,7 @@ import { ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import ReminderBell from '../components/ReminderBell.vue'
 import UserAvatar from '../components/UserAvatar.vue'
+import LogoMark from '../components/LogoMark.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -113,9 +117,23 @@ async function onCommand(cmd) {
   justify-content: center;
   gap: 8px;
   color: #fff;
-  font-size: 16px;
-  font-weight: 600;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.logo-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+}
+.logo-name {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+.logo-en {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: #9bb7b0;
 }
 .menu {
   border-right: none;

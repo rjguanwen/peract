@@ -1,4 +1,6 @@
-# 任务管理系统
+# 躬行（Peract）
+
+> 纸上千言，不如躬行一件。
 
 基于 **Vue 3 + Go + SQLite** 的任务管理系统，支持任务登记、任务分配、进展跟踪、状态查询、提醒通知。
 
@@ -87,7 +89,7 @@ SMTP_HOST=smtp.example.com
 SMTP_PORT=465
 SMTP_USER=noreply@example.com
 SMTP_PASSWORD=xxx
-SMTP_FROM=任务系统 <noreply@example.com>
+SMTP_FROM=躬行 <noreply@example.com>
 ```
 
 ## 项目结构

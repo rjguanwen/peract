@@ -1,6 +1,6 @@
-# Task MCP Server
+# 躬行（Peract）· Task MCP Server
 
-通过 [Model Context Protocol (MCP)](https://modelcontextprotocol.io) 暴露任务管理系统的全部功能，AI agent 可直接调用工具操作任务。
+通过 [Model Context Protocol (MCP)](https://modelcontextprotocol.io) 暴露躬行（任务管理）的全部功能，AI agent 可直接调用工具操作任务。
 
 ## 快速开始
 

@@ -202,8 +202,8 @@ func (h *Handler) CreateInvites(c *gin.Context) {
 			continue
 		}
 
-		subject := "「任务管理系统」邀请你加入"
-		body := "你好：\n\n" + meName + " 邀请你加入「任务管理系统」。\n\n请打开以下链接完成注册（链接 7 天内有效，且仅限本邮件送达的邮箱 " +
+		subject := "「躬行」邀请你加入"
+		body := "你好：\n\n" + meName + " 邀请你加入「躬行」（Peract，任务管理）。\n\n请打开以下链接完成注册（链接 7 天内有效，且仅限本邮件送达的邮箱 " +
 			email + " 使用）：\n\n" + inviteURL + "\n\n如非本人操作，请忽略此邮件。"
 		if err := service.SendEmail(h.cfg, email, subject, body); err != nil {
 			log.Printf("[邀请注册] 发送邀请邮件失败：%v", err)

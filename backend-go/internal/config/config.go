@@ -44,7 +44,7 @@ func Load() *Config {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		ProjectName:               getEnv("PROJECT_NAME", "任务管理系统"),
+		ProjectName:               getEnv("PROJECT_NAME", "躬行"),
 		Port:                      getEnv("PORT", "8001"),
 		SecretKey:                 getEnv("SECRET_KEY", "please-change-me-to-a-random-secret"),
 		DatabaseURL:               getEnv("DATABASE_URL", "sqlite:///./task.db"),

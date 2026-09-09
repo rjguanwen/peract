@@ -4,7 +4,7 @@
       <div class="auth-title">
         <el-icon :size="28"><List /></el-icon>
         <h2>注册账号</h2>
-        <p class="sub">加入任务管理系统</p>
+        <p class="sub">躬行 · Peract　纸上千言，不如躬行一件。</p>
       </div>
 
       <el-alert

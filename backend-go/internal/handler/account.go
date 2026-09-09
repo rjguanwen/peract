@@ -243,7 +243,7 @@ func (h *Handler) SendForgotEmail(c *gin.Context) {
 		return
 	}
 
-	subject := "「任务管理系统」密码重置"
+	subject := "「躬行」密码重置"
 	body := "你好，" + user.FullName + "：\n\n我们收到了你的密码重置申请。请打开以下链接，在 30 分钟内完成密码重置：\n\n" +
 		resetURL + "\n\n如非本人操作，请忽略此邮件，你的密码不会发生变化。"
 	if err := service.SendEmail(h.cfg, user.Email, subject, body); err != nil {

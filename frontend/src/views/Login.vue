@@ -2,8 +2,12 @@
   <div class="login-page">
     <el-card class="login-card">
       <div class="login-title">
-        <el-icon :size="28"><List /></el-icon>
-        <h2>任务管理系统</h2>
+        <LogoMark :size="52" />
+        <div class="brand-block">
+          <h2>躬行</h2>
+          <div class="slogan">纸上千言，不如躬行一件。</div>
+          <div class="brand-en">PERACT</div>
+        </div>
       </div>
       <el-form ref="formRef" :model="form" :rules="rules" size="large" @keyup.enter="onSubmit">
         <el-form-item prop="username">
@@ -38,6 +42,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
+import LogoMark from '../components/LogoMark.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -84,12 +89,30 @@ async function onSubmit() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
-.login-title h2 {
+.brand-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 10px;
+}
+.brand-block h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 22px;
+  letter-spacing: 6px;
+}
+.slogan {
+  margin-top: 6px;
+  color: #6b7280;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+}
+.brand-en {
+  margin-top: 2px;
+  color: #9ca3af;
+  font-size: 10px;
+  letter-spacing: 4px;
 }
 .login-btn {
   width: 100%;

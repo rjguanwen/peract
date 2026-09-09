@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/smtp"
@@ -46,10 +47,10 @@ func SendWebhook(cfg *config.Config, title, content string) {
 	}
 }
 
-// SendEmail 发送邮件，失败静默
-func SendEmail(cfg *config.Config, to, subject, body string) {
+// SendEmail 发送邮件；SMTP 未配置或发送失败时返回错误。
+func SendEmail(cfg *config.Config, to, subject, body string) error {
 	if cfg.SMTPHost == "" || cfg.SMTPUser == "" || cfg.SMTPFrom == "" {
-		return
+		return errors.New("SMTP 未配置")
 	}
 	header := make(textproto.MIMEHeader)
 	header.Set("From", cfg.SMTPFrom)
@@ -77,9 +78,7 @@ func SendEmail(cfg *config.Config, to, subject, body string) {
 	} else {
 		err = smtpSendPlain(addr, host, cfg, to, buf.Bytes())
 	}
-	if err != nil {
-		log.Printf("[notify] 邮件发送失败: %v", err)
-	}
+	return err
 }
 
 func smtpSendTLS(addr, host string, cfg *config.Config, to string, msg []byte) error {

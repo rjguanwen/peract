@@ -36,6 +36,8 @@ func Migrate(db *gorm.DB) error {
 		&model.Task{},
 		&model.TaskProgress{},
 		&model.Reminder{},
+		&model.SystemSetting{},
+		&model.Invitation{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
 	}

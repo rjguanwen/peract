@@ -55,6 +55,41 @@ func (a *Auth) CreateToken(userID uint) (string, error) {
 	return token.SignedString([]byte(a.cfg.SecretKey))
 }
 
+// SignResetToken 生成一次性密码重置令牌（有效期 30 分钟）。
+func (a *Auth) SignResetToken(email string) (string, error) {
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"purpose": "reset_password",
+		"email":   email,
+		"iat":     now.Unix(),
+		"exp":     now.Add(30 * time.Minute).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(a.cfg.SecretKey))
+}
+
+// VerifyResetToken 校验重置令牌，返回其绑定的邮箱。
+func (a *Auth) VerifyResetToken(tokenStr string) (string, error) {
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return []byte(a.cfg.SecretKey), nil
+	})
+	if err != nil || !token.Valid {
+		return "", fmt.Errorf("invalid token")
+	}
+	if claims["purpose"] != "reset_password" {
+		return "", fmt.Errorf("invalid purpose")
+	}
+	email, ok := claims["email"].(string)
+	if !ok || email == "" {
+		return "", fmt.Errorf("invalid email claim")
+	}
+	return email, nil
+}
+
 // RequireUser 要求登录
 func (a *Auth) RequireUser() gin.HandlerFunc {
 	return func(c *gin.Context) {

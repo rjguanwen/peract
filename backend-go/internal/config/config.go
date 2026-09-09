@@ -15,6 +15,9 @@ type Config struct {
 	DatabaseURL               string
 	AccessTokenExpireMinutes_ int
 
+	AppBaseURL string // 对外前端地址，用于拼邀请/重置链接
+	UploadDir  string // 上传文件根目录（头像等）
+
 	NotifyWebhookURL  string
 	NotifyWebhookType string
 	SMTPHost          string
@@ -46,6 +49,9 @@ func Load() *Config {
 		SecretKey:                 getEnv("SECRET_KEY", "please-change-me-to-a-random-secret"),
 		DatabaseURL:               getEnv("DATABASE_URL", "sqlite:///./task.db"),
 		AccessTokenExpireMinutes_: getEnvInt("ACCESS_TOKEN_EXPIRE_MINUTES", 10080),
+
+		AppBaseURL: getEnv("APP_BASE_URL", "http://localhost:5173"),
+		UploadDir:  getEnv("UPLOAD_DIR", "./uploads"),
 
 		NotifyWebhookURL:  getEnv("NOTIFY_WEBHOOK_URL", ""),
 		NotifyWebhookType: getEnv("NOTIFY_WEBHOOK_TYPE", "generic"),

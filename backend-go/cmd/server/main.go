@@ -35,6 +35,9 @@ func main() {
 	h := handler.New(db, cfg, auth)
 	h.RegisterRoutes(r)
 
+	// 上传文件静态访问（头像等，公开）
+	r.Static("/uploads", cfg.UploadDir)
+
 	addr := ":" + cfg.Port
 	log.Printf("%s 已启动，监听 %s", cfg.ProjectName, addr)
 	if err := r.Run(addr); err != nil {

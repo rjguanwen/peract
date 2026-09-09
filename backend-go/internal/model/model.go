@@ -10,14 +10,19 @@ import (
 
 // User 用户
 type User struct {
-	ID             uint      `gorm:"primaryKey" json:"id"`
-	Username       string    `gorm:"size:64;uniqueIndex" json:"username"`
-	Email          string    `gorm:"size:255;uniqueIndex" json:"email"`
-	FullName       string    `gorm:"size:128" json:"full_name"`
-	HashedPassword string    `gorm:"size:255" json:"-"`
-	Role           string    `gorm:"size:16;default:user" json:"role"`
-	IsActive       bool      `gorm:"default:true" json:"is_active"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID               uint       `gorm:"primaryKey" json:"id"`
+	Username         string     `gorm:"size:64;uniqueIndex" json:"username"`
+	Email            string     `gorm:"size:255;uniqueIndex" json:"email"`
+	FullName         string     `gorm:"size:128" json:"full_name"`
+	HashedPassword   string     `gorm:"size:255" json:"-"`
+	Role             string     `gorm:"size:16;default:user" json:"role"`
+	IsActive         bool       `gorm:"default:true" json:"is_active"`
+	AvatarURL        *string    `gorm:"size:255" json:"avatar_url"` // 头像（/uploads/avatars/xxx.png）
+	Signature        string     `gorm:"size:255" json:"signature"`  // 个性签名
+	PasswordHint     string     `gorm:"size:128" json:"-"`          // 密码提示词
+	SecurityQuestion string     `gorm:"size:128" json:"-"`          // 找回安全问题
+	SecurityAnswer   string     `gorm:"size:128" json:"-"`          // 安全答案（存小写，不回传）
+	CreatedAt        time.Time  `json:"created_at"`
 }
 
 func NewUser(username, email, password, role, fullName string) *User {
@@ -108,6 +113,36 @@ type Reminder struct {
 	TaskTitle string `gorm:"-" json:"task_title"`
 	Task      *Task  `gorm:"foreignKey:TaskID" json:"-"`
 }
+
+// SystemSetting 系统设置（key-value，与用户无关）
+type SystemSetting struct {
+	Key   string `gorm:"primaryKey;size:64" json:"key"`
+	Value string `gorm:"size:255" json:"value"`
+}
+
+// 系统设置键
+const (
+	SettingRegistrationEnabled = "registration_enabled" // "true"/"false"
+)
+
+// Invitation 邀请注册记录（管理员邀请指定邮箱注册）
+type Invitation struct {
+	ID        uint       `gorm:"primaryKey" json:"id"`
+	Email     string     `gorm:"size:255;uniqueIndex;not null" json:"email"`
+	Token     string     `gorm:"size:64;uniqueIndex;not null" json:"-"` // 随机邀请令牌（仅存库，不回传）
+	InvitedBy uint       `gorm:"not null" json:"invited_by"`            // 发起邀请的管理员 id
+	Status    string     `gorm:"size:16;default:pending" json:"status"` // pending / registered / revoked
+	ExpiresAt time.Time  `gorm:"not null" json:"expires_at"`
+	CreatedAt time.Time  `gorm:"not null" json:"created_at"`
+	UsedAt    *time.Time `json:"used_at"` // 实际完成注册的时间
+}
+
+// 邀请状态
+const (
+	InviteStatusPending    = "pending"    // 待接受
+	InviteStatusRegistered = "registered" // 已注册（链接已被使用）
+	InviteStatusRevoked    = "revoked"    // 已撤销
+)
 
 // 常量
 const (

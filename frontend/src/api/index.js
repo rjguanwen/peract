@@ -45,6 +45,15 @@ export const authApi = {
   },
   me: () => api.get('/auth/me'),
   register: (data) => api.post('/auth/register', data),
+  logout: () => api.post('/auth/logout'),
+  changePassword: (data) => api.put('/auth/password', data),
+  getSecurity: () => api.get('/auth/security'),
+  setSecurity: (data) => api.put('/auth/security', data),
+  getRecovery: (email) => api.get('/auth/forgot', { params: { email } }),
+  resetPassword: (data) => api.post('/auth/forgot/reset', data),
+  sendForgotEmail: (email) => api.post('/auth/forgot/send', { email }),
+  resetByToken: (data) => api.post('/auth/reset', data),
+  inviteInfo: (token) => api.get('/auth/invite/info', { params: { token } }),
 }
 
 // ===== 用户 =====
@@ -52,6 +61,28 @@ export const userApi = {
   list: () => api.get('/users'),
   create: (data) => api.post('/users', data),
   update: (id, data) => api.patch(`/users/${id}`, data),
+}
+
+// ===== 个人资料 =====
+export const profileApi = {
+  update: (data) => api.put('/profile', data),
+  uploadAvatar: (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.put('/profile/avatar', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 30000,
+    })
+  },
+}
+
+// ===== 管理员（设置与邀请注册） =====
+export const adminApi = {
+  settings: () => api.get('/admin/settings'),
+  setRegistration: (enabled) => api.put('/admin/settings/registration', { enabled }),
+  invites: () => api.get('/admin/invites'),
+  createInvites: (emails) => api.post('/admin/invites', { emails }),
+  revokeInvite: (id) => api.post(`/admin/invites/${id}/revoke`),
 }
 
 // ===== 任务 =====

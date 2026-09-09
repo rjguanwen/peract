@@ -39,14 +39,17 @@
           <ReminderBell />
           <el-dropdown @command="onCommand">
             <span class="user-info">
-              <el-icon><UserFilled /></el-icon>
+              <UserAvatar :src="auth.user?.avatar_url" :name="auth.user?.full_name || auth.user?.username" :size="30" />
               {{ auth.user?.full_name || auth.user?.username }}
               <el-tag v-if="auth.isAdmin" size="small" type="danger" effect="dark">管理员</el-tag>
               <el-icon><ArrowDown /></el-icon>
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="logout">
+                <el-dropdown-item command="settings">
+                  <el-icon><Setting /></el-icon>个人设置
+                </el-dropdown-item>
+                <el-dropdown-item command="logout" divided>
                   <el-icon><SwitchButton /></el-icon>退出登录
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -68,6 +71,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import ReminderBell from '../components/ReminderBell.vue'
+import UserAvatar from '../components/UserAvatar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -81,6 +85,10 @@ const activeMenu = computed(() => {
 const pageTitle = computed(() => route.meta.title || '')
 
 async function onCommand(cmd) {
+  if (cmd === 'settings') {
+    router.push('/settings')
+    return
+  }
   if (cmd === 'logout') {
     await ElMessageBox.confirm('确定退出登录吗？', '提示', { type: 'warning' })
     auth.logout()

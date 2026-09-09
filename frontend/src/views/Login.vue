@@ -21,6 +21,11 @@
         <el-button type="primary" class="login-btn" :loading="loading" @click="onSubmit">
           登 录
         </el-button>
+        <div class="login-actions">
+          <router-link to="/forgot-password" class="link">忘记密码？</router-link>
+          <span class="divider">|</span>
+          <router-link to="/register" class="link">注册账号</router-link>
+        </div>
         <div class="login-tip">默认管理员：admin / admin123</div>
       </el-form>
     </el-card>
@@ -88,6 +93,25 @@ async function onSubmit() {
 }
 .login-btn {
   width: 100%;
+}
+.login-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+.link {
+  color: #409eff;
+  font-size: 13px;
+  text-decoration: none;
+}
+.link:hover {
+  color: #66b1ff;
+}
+.divider {
+  color: #d1d5db;
+  font-size: 12px;
 }
 .login-tip {
   margin-top: 16px;

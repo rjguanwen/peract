@@ -48,8 +48,18 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	req.FullName = strings.TrimSpace(req.FullName)
 	if !usernameRe.MatchString(req.Username) {
 		badRequest(c, "用户名只能包含字母、数字、下划线、点、横线")
+		return
+	}
+	if !emailRe.MatchString(req.Email) {
+		badRequest(c, "邮箱格式不正确")
+		return
+	}
+	if len(req.Password) < 6 {
+		badRequest(c, "密码至少需要 6 个字符")
 		return
 	}
 	role := strings.ToLower(req.Role)
@@ -80,7 +90,9 @@ func (h *Handler) CreateUser(c *gin.Context) {
 }
 
 // UpdateUser PATCH /users/:id (admin)
+// 保护规则：不能修改管理员账号的角色或启用状态；不能修改自己的角色或启用状态。
 func (h *Handler) UpdateUser(c *gin.Context) {
+	ctx := currentUser(c)
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		badRequest(c, "用户 ID 不合法")
@@ -96,17 +108,42 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		notFound(c, "用户不存在")
 		return
 	}
+
+	// 是否在改动「角色/启用状态」这类权限敏感字段
+	changingPrivilege := false
+	if req.Role != nil && strings.ToLower(*req.Role) != user.Role {
+		changingPrivilege = true
+	}
+	if req.IsActive != nil && *req.IsActive != user.IsActive {
+		changingPrivilege = true
+	}
+	if changingPrivilege {
+		if user.Role == model.RoleAdmin {
+			forbidden(c, "不能修改管理员账号的角色或启用状态")
+			return
+		}
+		if user.ID == ctx.ID {
+			forbidden(c, "不能修改自己的角色或启用状态")
+			return
+		}
+	}
+
 	if req.FullName != nil {
-		user.FullName = *req.FullName
+		user.FullName = strings.TrimSpace(*req.FullName)
 	}
 	if req.Email != nil {
+		email := strings.ToLower(strings.TrimSpace(*req.Email))
+		if !emailRe.MatchString(email) {
+			badRequest(c, "邮箱格式不正确")
+			return
+		}
 		var count int64
-		h.db.Model(&model.User{}).Where("email = ? AND id != ?", *req.Email, user.ID).Count(&count)
+		h.db.Model(&model.User{}).Where("email = ? AND id != ?", email, user.ID).Count(&count)
 		if count > 0 {
 			badRequest(c, "邮箱已被注册")
 			return
 		}
-		user.Email = *req.Email
+		user.Email = email
 	}
 	if req.Role != nil {
 		role := strings.ToLower(*req.Role)
@@ -117,6 +154,10 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		user.Role = role
 	}
 	if req.Password != nil && *req.Password != "" {
+		if len(*req.Password) < 6 {
+			badRequest(c, "密码至少需要 6 个字符")
+			return
+		}
 		if err := user.SetPassword(*req.Password); err != nil {
 			fail(c, http.StatusInternalServerError, "设置密码失败")
 			return

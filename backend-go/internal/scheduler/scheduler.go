@@ -72,7 +72,9 @@ func (s *Scheduler) checkReminders() {
 			msg = title
 		}
 		service.SendWebhook(s.cfg, title, msg)
-		service.SendEmail(s.cfg, emailTo, title, msg)
+		if err := service.SendEmail(s.cfg, emailTo, title, msg); err != nil {
+			log.Printf("[notify] 提醒邮件发送失败: %v", err)
+		}
 		s.db.Save(r)
 	}
 }

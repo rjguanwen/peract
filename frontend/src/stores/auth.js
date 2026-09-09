@@ -18,8 +18,19 @@ export const useAuthStore = defineStore('auth', {
       localStorage.setItem('token', data.access_token)
       localStorage.setItem('user', JSON.stringify(data.user))
     },
+    async register(data) {
+      const res = await authApi.register(data)
+      this.token = res.access_token
+      this.user = res.user
+      localStorage.setItem('token', res.access_token)
+      localStorage.setItem('user', JSON.stringify(res.user))
+    },
     async fetchMe() {
       const user = await authApi.me()
+      this.applyUser(user)
+    },
+    // 将后端返回的用户信息同步到本地
+    applyUser(user) {
       this.user = user
       localStorage.setItem('user', JSON.stringify(user))
     },

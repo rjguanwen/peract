@@ -9,6 +9,24 @@ const routes = [
     meta: { public: true },
   },
   {
+    path: '/register',
+    name: 'register',
+    component: () => import('../views/Register.vue'),
+    meta: { public: true },
+  },
+  {
+    path: '/forgot-password',
+    name: 'forgot-password',
+    component: () => import('../views/ForgotPassword.vue'),
+    meta: { public: true },
+  },
+  {
+    path: '/reset-password',
+    name: 'reset-password',
+    component: () => import('../views/ResetPassword.vue'),
+    meta: { public: true },
+  },
+  {
     path: '/',
     component: () => import('../layout/MainLayout.vue'),
     children: [
@@ -17,6 +35,12 @@ const routes = [
         name: 'dashboard',
         component: () => import('../views/Dashboard.vue'),
         meta: { title: '仪表盘' },
+      },
+      {
+        path: 'settings',
+        name: 'settings',
+        component: () => import('../views/Settings.vue'),
+        meta: { title: '个人设置' },
       },
       {
         path: 'tasks',

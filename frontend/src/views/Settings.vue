@@ -111,6 +111,14 @@
 
             <div class="qa-block">
               <div class="qa-title">找回安全问题</div>
+              <el-alert
+                v-if="answerLegacy"
+                type="warning"
+                :closable="false"
+                show-icon
+                class="qa-alert"
+                title="该账号的安全答案存于旧版本，已不再用于校验，请重新设置一次才能通过问答找回密码。"
+              />
               <p v-if="secForm.existingQuestion" class="qa-current">
                 当前问题：<span>{{ secForm.existingQuestion }}</span>（修改问题时需重新填写答案）
               </p>
@@ -152,6 +160,7 @@
 
 <script setup>
 import { computed, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
 import { profileApi, authApi } from '../api'
@@ -159,6 +168,7 @@ import UserAvatar from '../components/UserAvatar.vue'
 import { formatDateTime } from '../utils/constants'
 
 const auth = useAuthStore()
+const router = useRouter()
 
 const savingProfile = ref(false)
 const changingPwd = ref(false)
@@ -230,10 +240,11 @@ async function changePassword() {
       oldPassword: pwdForm.oldPassword,
       newPassword: pwdForm.newPassword,
     })
-    ElMessage.success('密码修改成功，下次登录请使用新密码')
-    pwdForm.oldPassword = ''
-    pwdForm.newPassword = ''
-    pwdForm.confirm = ''
+    // 后端会推送口令版本号并吊销当前令牌，旧令牌立刻失效，
+    // 不把本地会话一并清掉的话，用户会停在原地发现哪个按钮都在报错
+    ElMessage.success('密码修改成功，请使用新密码重新登录')
+    auth.clear()
+    router.push('/login')
   } catch {
     /* 拦截器已提示 */
   } finally {
@@ -261,6 +272,8 @@ const secForm = reactive({
 const secSavingHint = ref(false)
 const secSavingQA = ref(false)
 const secClearing = ref(false)
+// 旧版存的是明文答案，后端已不再用它做校验，需要提示用户重设一次
+const answerLegacy = ref(false)
 
 async function loadSecurity() {
   try {
@@ -269,6 +282,7 @@ async function loadSecurity() {
     secForm.existingQuestion = data.security_question || ''
     secForm.securityQuestion = data.security_question || ''
     secForm.securityAnswer = ''
+    answerLegacy.value = !!data.answer_legacy
   } catch {
     /* 拦截器已提示 */
   }
@@ -410,6 +424,9 @@ loadSecurity()
   margin: 0 0 10px;
   color: #9ca3af;
   font-size: 12px;
+}
+.qa-alert {
+  margin-bottom: 10px;
 }
 .qa-current span {
   color: #4b5563;

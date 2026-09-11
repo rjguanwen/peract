@@ -2,8 +2,7 @@ import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
 export default defineConfig(({ mode }) => {
-  // 后端端口：默认指向 Go 后端(8001)；切回 Python 后端时设为 8000
-  // 也可在 frontend/.env 中配置 VITE_BACKEND_PORT=8000
+  // 后端端口：Go 后端默认 8001，可在 frontend/.env 中用 VITE_BACKEND_PORT 覆盖
   const env = loadEnv(mode, process.cwd(), '')
   const backendPort = env.VITE_BACKEND_PORT || '8001'
 

@@ -103,6 +103,7 @@
   .method.get { background: var(--green); }
   .method.post { background: var(--primary); }
   .method.patch { background: var(--amber); }
+  .method.put { background: #7c3aed; }
   .method.delete { background: var(--red); }
   .path {
     font-family: 'SF Mono', Consolas, monospace;
@@ -157,9 +158,11 @@
   <div class="nav-group">概览</div>
   <a href="#overview" class="active">系统说明</a>
   <a href="#auth">认证接口</a>
+  <a href="#account">账号与安全</a>
   <a href="#users">用户接口</a>
   <a href="#tasks">任务接口</a>
   <a href="#reminders">提醒接口</a>
+  <a href="#admin">系统管理</a>
   <a href="#stats">统计接口</a>
   <div class="nav-group">数据结构</div>
   <a href="#d-user">User 用户</a>
@@ -183,6 +186,8 @@
       <li>登录接口使用 OAuth2 Password 模式（<code>application/x-www-form-urlencoded</code>）。</li>
       <li>错误响应统一格式：<code>{"detail": "错误信息"}</code>。</li>
       <li>时间字段格式：<code>2026-08-20T18:00:00</code>（本地时间，无时区）。</li>
+      <li><code>PATCH</code> 类接口为局部更新：字段缺省或为 <code>null</code> 都表示「本次不改」，清空必须用显式标志（见任务接口）。</li>
+      <li>登录失败与找回密码等敏感接口有频率限制，超限返回 <code>429</code> 并带 <code>Retry-After</code> 秒数。</li>
     </ul>
   </div>
 
@@ -202,6 +207,8 @@
   <span class="key">"token_type"</span>: <span class="str">"bearer"</span>,
   <span class="key">"user"</span>: { <span class="str">"id"</span>: <span class="num">1</span>, <span class="str">"username"</span>: <span class="str">"admin"</span>, ... }
 }</pre>
+    <div class="note">同一「来源 IP + 用户名」在窗口内失败次数超过阈值（默认 10 分钟 5 次）后返回 <code>429</code>，
+    响应头 <code>Retry-After</code> 为待等秒数；锁定期内即使口令正确也会被拒。口令错误与账号不存在返回同一个 <code>400</code> 提示。</div>
   </div>
 
   <div class="card">
@@ -214,7 +221,10 @@
       <tr><td><code>password</code></td><td class="type">string</td><td class="req">是</td><td>至少 6 位</td></tr>
       <tr><td><code>full_name</code></td><td class="type">string</td><td class="opt">否</td><td>姓名</td></tr>
       <tr><td><code>role</code></td><td class="type">string</td><td class="opt">否</td><td>忽略，固定为 user</td></tr>
+      <tr><td><code>inviteToken</code></td><td class="type">string</td><td class="opt">否</td><td>邀请令牌（来自管理员发出的邀请链接）</td></tr>
     </table>
+    <div class="note">管理员关闭自助注册后，<b>仅携带有效 <code>inviteToken</code> 的请求</b>能注册成功（否则 <code>403</code>）；
+    邀请链接与邮箱绑定，一次性、默认 7 天过期。</div>
     <h3>响应 201</h3>
     <pre>{ <span class="str">"id"</span>: <span class="num">2</span>, <span class="str">"username"</span>: <span class="str">"user1"</span>, <span class="str">"email"</span>: <span class="str">"..."</span>, <span class="str">"role"</span>: <span class="str">"user"</span>, ... }</pre>
   </div>
@@ -224,6 +234,132 @@
     <div class="desc">获取当前登录用户信息。</div>
     <h3>响应 200</h3>
     <pre>{ <span class="str">"id"</span>: <span class="num">1</span>, <span class="str">"username"</span>: <span class="str">"admin"</span>, <span class="str">"role"</span>: <span class="str">"admin"</span>, <span class="str">"is_active"</span>: <span class="key">true</span>, ... }</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/auth/logout</span> <span class="tag">公开</span></div>
+    <div class="desc">退出登录：把当前访问令牌加入吊销名单，使其立即失效。不携带令牌时为空操作。</div>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"success"</span>: <span class="key">true</span> }</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/auth/invite/info</span> <span class="tag">公开</span></div>
+    <div class="desc">校验邀请令牌并返回受邀邮箱与邀请人，供注册页预填。</div>
+    <table>
+      <tr><th>参数</th><th>位置</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>token</code></td><td>Query</td><td class="type">string</td><td>邀请令牌（链接里的 <code>?invite=</code>）</td></tr>
+    </table>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"email"</span>: <span class="str">"new@example.com"</span>, <span class="str">"invitedByDisplayName"</span>: <span class="str">"系统管理员"</span>, <span class="str">"expiresAt"</span>: <span class="str">"2026-08-21 10:00:00"</span> }</pre>
+    <div class="note">令牌无效 / 已过期 / 已被使用 / 已撤销均返回 <code>400</code>，<code>detail</code> 里说明具体原因。</div>
+  </div>
+
+  <h2 id="account">账号与安全</h2>
+
+  <div class="card">
+    <div class="api-head"><span class="method put">PUT</span><span class="path">/auth/password</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">修改自己的密码。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>oldPassword</code></td><td class="type">string</td><td class="req">是</td><td>原密码</td></tr>
+      <tr><td><code>newPassword</code></td><td class="type">string</td><td class="req">是</td><td>至少 6 位，且不得与原密码相同</td></tr>
+    </table>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"success"</span>: <span class="key">true</span> }</pre>
+    <div class="note">成功后<b>当前会话与此前签发的全部令牌立即失效</b>（含已泄露的旧令牌），前端必须改走重新登录。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/auth/security</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">读取自己的安全设置（不返回答案）。</div>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"password_hint"</span>: <span class="str">"..."</span>, <span class="str">"security_question"</span>: <span class="str">"..."</span>, <span class="str">"has_security"</span>: <span class="key">true</span>, <span class="str">"answer_legacy"</span>: <span class="key">false</span> }</pre>
+    <div class="note"><code>answer_legacy: true</code> 表示存量明文答案，已停止参与校验，需重新设置一次。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method put">PUT</span><span class="path">/auth/security</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">设置/清除密码提示与安全问答（部分更新，只传需改的字段）。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>passwordHint</code></td><td class="type">string</td><td>密码提示，最多 128 字</td></tr>
+      <tr><td><code>securityQuestion</code></td><td class="type">string</td><td>安全问题</td></tr>
+      <tr><td><code>securityAnswer</code></td><td class="type">string</td><td>答案，最多 128 字，<b>以 bcrypt 哈希入库</b></td></tr>
+    </table>
+    <div class="note">只改 <code>securityQuestion</code> 而不带 <code>securityAnswer</code> 会返回 <code>400</code>，避免题目与答案对不上。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method put">PUT</span><span class="path">/profile</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">更新个人资料，响应为更新后的完整用户对象。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>full_name</code></td><td class="type">string</td><td>昵称/姓名，最多 128 字</td></tr>
+      <tr><td><code>signature</code></td><td class="type">string</td><td>个性签名，最多 80 字</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method put">PUT</span><span class="path">/profile/avatar</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">上传头像（<code>multipart/form-data</code>，字段名 <code>file</code>），替掉旧图时删除旧文件。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>说明</th></tr>
+      <tr><td><code>file</code></td><td class="type">file</td><td>图片，≤ 5MB；类型<b>按文件头魔数判定</b>（png / jpeg / gif / webp）</td></tr>
+    </table>
+    <div class="note">不信任客户端的 <code>Content-Type</code> 与扩展名；识别不出的内容返回 <code>400</code>。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/auth/forgot</span> <span class="tag">公开</span></div>
+    <div class="desc">按邮箱查找回题目。<code>email</code> 为 Query 参数。</div>
+    <h3>响应 200</h3>
+<pre><span class="key">{
+  "exists"</span>: <span class="key">true</span>,
+  <span class="key">"security_question"</span>: <span class="str">"母校叫什么？"</span>,
+  <span class="key">"password_hint"</span>: <span class="str">"..."</span>,
+  <span class="key">"has_security"</span>: <span class="key">true</span>,
+  <span class="key">"answer_legacy"</span>: <span class="key">false</span>
+}</pre>
+    <div class="note">邮箱不存在与账号已停用返回<b>完全相同</b>的响应（均为 <code>exists: false</code>），不得用于探测邮箱是否注册。
+    存量明文答案的账号会置 <code>answer_legacy: true</code> 且<b>不再返回题目</b>。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/auth/forgot/reset</span> <span class="tag">公开</span></div>
+    <div class="desc">凭安全问题答案重置密码。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>email</code></td><td class="type">string</td><td class="req">是</td><td>注册邮箱</td></tr>
+      <tr><td><code>answer</code></td><td class="type">string</td><td class="req">是</td><td>答案（比对前去除首尾空白，走哈希比较）</td></tr>
+      <tr><td><code>newPassword</code></td><td class="type">string</td><td class="req">是</td><td>新密码，至少 6 位</td></tr>
+    </table>
+    <div class="note">答案错误与邮箱不存在提示同一句话；超过频率限制返回 <code>429</code>；
+    存量明文答案返回 <code>423 Locked</code>，需重设安全答案或改用邮件链接。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/auth/forgot/send</span> <span class="tag">公开</span></div>
+    <div class="desc">向注册邮箱发送一次性重置链接（后台队列发信，请求本身不阻塞）。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>email</code></td><td class="type">string</td><td class="req">是</td><td>注册邮箱</td></tr>
+    </table>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"sent"</span>: <span class="key">true</span> }</pre>
+    <div class="note">邮箱不存在、已停用与发送成功一律回同样的 <code>{"sent": true}</code>，不供探测。
+    <b>SMTP 未配置时：生产环境返回 <code>503</code></b>；非生产环境则返回 <code>{"sent": false, "dev": true, "reset_url": "..."}</code> 便于本地联调。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/auth/reset</span> <span class="tag">公开</span></div>
+    <div class="desc">使用邮件里的重置令牌设置新密码。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>token</code></td><td class="type">string</td><td class="req">是</td><td>重置令牌，<b>有效期 30 分钟且用一次即废</b></td></tr>
+      <tr><td><code>newPassword</code></td><td class="type">string</td><td class="req">是</td><td>新密码</td></tr>
+    </table>
+    <div class="note">重置后该账号此前签发的全部令牌作废；访问令牌不能当重置令牌用，反之亦然。</div>
   </div>
 
   <h2 id="users">用户接口</h2>
@@ -334,10 +470,15 @@
       <tr><td><code>description</code></td><td class="type">string</td><td>描述（仅管理员/创建者）</td></tr>
       <tr><td><code>priority</code></td><td class="type">string</td><td>优先级（仅管理员/创建者）</td></tr>
       <tr><td><code>assignee_id</code></td><td class="type">integer</td><td>负责人（仅管理员/创建者）</td></tr>
+      <tr><td><code>clear_assignee</code></td><td class="type">boolean</td><td>置 <code>true</code> 清空负责人（仅管理员/创建者）</td></tr>
       <tr><td><code>due_date</code></td><td class="type">string</td><td>截止时间（仅管理员/创建者）</td></tr>
+      <tr><td><code>clear_due_date</code></td><td class="type">boolean</td><td>置 <code>true</code> 清空截止时间（仅管理员/创建者）</td></tr>
       <tr><td><code>status</code></td><td class="type">string</td><td>状态流转（负责人可操作）</td></tr>
       <tr><td><code>progress</code></td><td class="type">integer</td><td>进度 0-100，达 100 自动完成（负责人可操作）</td></tr>
     </table>
+    <div class="note"><b>清空字段必须用 <code>clear_*</code> 标志</b>：本接口是 PATCH 语义，<code>assignee_id</code>
+    缺省或传 <code>null</code> 都等于「本次不改」，只有 <code>{"clear_assignee": true}</code> 会真的写 NULL。
+    同一字段与其 <code>clear_*</code> 标志同时出现视为冲突，返回 <code>400</code>。</div>
     <div class="note">状态/进度变更会自动记录到进展时间线，并通知负责人。</div>
   </div>
 
@@ -388,7 +529,15 @@
     <div class="api-head"><span class="method get">GET</span><span class="path">/reminders/unread-count</span> <span class="tag auth">需登录</span></div>
     <div class="desc">未读提醒数量（顶部铃铛角标）。</div>
     <h3>响应 200</h3>
-    <pre><span class="num">3</span></pre>
+    <pre>{ <span class="str">"count"</span>: <span class="num">3</span> }</pre>
+    <div class="note">是对象而非裸数字，前端请取 <code>data.count</code>。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/reminders/read-all</span> <span class="tag auth">需登录</span></div>
+    <div class="desc">把当前用户未读的提醒全部标记已读（无需请求体）。</div>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"updated"</span>: <span class="num">3</span> }</pre>
   </div>
 
   <div class="card">
@@ -410,6 +559,60 @@
     <div class="desc">标记提醒为已读（本人或管理员）。</div>
     <h3>响应 200</h3>
     <pre>{ <span class="str">"id"</span>: <span class="num">4</span>, <span class="str">"read_at"</span>: <span class="str">"2026-08-14T14:00:00"</span>, ... }</pre>
+  </div>
+
+  <h2 id="admin">系统管理</h2>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/admin/settings</span> <span class="tag admin">仅管理员</span></div>
+    <div class="desc">读取系统设置。</div>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"registration_enabled"</span>: <span class="key">true</span> }</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method put">PUT</span><span class="path">/admin/settings/registration</span> <span class="tag admin">仅管理员</span></div>
+    <div class="desc">开关自助注册。缺 <code>enabled</code> 参数时返回 <code>400</code>。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>enabled</code></td><td class="type">boolean</td><td class="req">是</td><td>是否允许自助注册</td></tr>
+    </table>
+    <h3>响应 200</h3>
+    <pre>{ <span class="str">"registration_enabled"</span>: <span class="key">false</span> }</pre>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/admin/invites</span> <span class="tag admin">仅管理员</span></div>
+    <div class="desc">批量生成邀请链接并发信，<b>单次最多 20 个邮箱</b>。已存过的邮箱会复用原记录并重置令牌/有效期。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td><code>emails</code></td><td class="type">string[]</td><td class="req">是</td><td>受邀邮箱列表</td></tr>
+    </table>
+    <h3>响应 200</h3>
+<pre><span class="key">{
+  "results"</span>: [ { <span class="str">"email"</span>: <span class="str">"a@x.com"</span>, <span class="str">"ok"</span>: <span class="key">true</span> },
+              { <span class="str">"email"</span>: <span class="str">"b@x.com"</span>, <span class="str">"ok"</span>: <span class="key">false</span>, <span class="str">"reason"</span>: <span class="str">"该邮箱已注册"</span> } ]
+}</pre>
+    <div class="note"><b>部分失败不会回滚整单</b>：只要请求被受理就返回 200，需逐项看 <code>ok</code> / <code>reason</code>。
+    未配置 SMTP 时额外返回 <code>dev</code> 与 <code>invite_url</code>，供本地联调直接拿链接。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method get">GET</span><span class="path">/admin/invites</span> <span class="tag admin">仅管理员</span></div>
+    <div class="desc">邀请记录列表（按 ID 倒序，含邀请人快照）。</div>
+    <h3>响应 200</h3>
+<pre><span class="key">{
+  "items"</span>: [ { <span class="str">"id"</span>: <span class="num">1</span>, <span class="str">"email"</span>: <span class="str">"a@x.com"</span>, <span class="str">"status"</span>: <span class="str">"pending"</span>, <span class="str">"expired"</span>: <span class="key">false</span>,
+             <span class="str">"createdAt"</span>: <span class="str">"2026-08-14T10:00:00"</span>, <span class="str">"expiresAt"</span>: <span class="str">"2026-08-21T10:00:00"</span>,
+             <span class="str">"usedAt"</span>: <span class="key">null</span>, <span class="str">"invitedBy"</span>: { <span class="str">"id"</span>: <span class="num">1</span>, <span class="str">"display_name"</span>: <span class="str">"系统管理员"</span> } } ],
+  <span class="key">"total"</span>: <span class="num">1</span>
+}</pre>
+    <div class="note"><code>status</code> 取值 <code>pending</code> / <code>registered</code> / <code>revoked</code>；响应不含邀请令牌。</div>
+  </div>
+
+  <div class="card">
+    <div class="api-head"><span class="method post">POST</span><span class="path">/admin/invites/:id/revoke</span> <span class="tag admin">仅管理员</span></div>
+    <div class="desc">撤销一条邀请，仅 <code>pending</code> 状态可撤销（否则 <code>400</code>）。响应 <code>{"success": true}</code>。</div>
   </div>
 
   <h2 id="stats">统计接口</h2>
@@ -559,7 +762,11 @@
       <tr><td><code>401</code></td><td>未认证 / 凭证无效</td></tr>
       <tr><td><code>403</code></td><td>无权限</td></tr>
       <tr><td><code>404</code></td><td>资源不存在</td></tr>
+      <tr><td><code>413</code></td><td>请求体超过 <code>MAX_BODY_BYTES</code></td></tr>
+      <tr><td><code>423</code></td><td>账号被锁：仅用于存量明文安全答案，需重设安全问题</td></tr>
+      <tr><td><code>429</code></td><td>频率超限，读 <code>Retry-After</code> 头确定重试时机</td></tr>
       <tr><td><code>500</code></td><td>服务器内部错误</td></tr>
+      <tr><td><code>503</code></td><td>依赖的外部服务不可用（如生产环境未配 SMTP）</td></tr>
     </table>
     <h3>权限模型</h3>
     <table>
@@ -575,9 +782,10 @@
     </table>
     <h3>说明</h3>
     <ul style="margin-left:18px; font-size:13.5px; color:var(--muted);">
-      <li>删除为<b>逻辑删除</b>，数据保留，可在回收站恢复。</li>
+      <li>删除为<b>逻辑删除</b>，数据保留，可在回收站恢复；回收站按用户隔离，普通用户只看到自己创建的已删任务。</li>
       <li>定时任务：每 30 秒扫描到期提醒并推送；每 10 分钟检查逾期任务生成提醒（每天一条）。</li>
-      <li>外部通知（Webhook / 邮件）为可选项，未配置则仅站内提醒。</li>
+      <li>外部通知（Webhook / 邮件）为可选项，未配置则仅站内提醒；推送走<b>异步队列</b>，不阻塞请求，队列满则丢弃并记日志。</li>
+      <li>限流计数存在进程内存，<b>仅单实例部署有效</b>；多实例扩容需换成共享存储，并记得配置 <code>TRUSTED_PROXIES</code>。</li>
     </ul>
   </div>
 

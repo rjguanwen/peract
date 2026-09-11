@@ -76,6 +76,11 @@ const rules = {
   title: [{ required: true, message: '请输入任务标题', trigger: 'blur' }],
 }
 
+// el-select / el-date-picker 清空后可能是 null、undefined 或 ''，一视同仁
+function isEmpty(value) {
+  return value === null || value === undefined || value === ''
+}
+
 watch(
   () => props.modelValue,
   async (visible) => {
@@ -95,6 +100,9 @@ watch(
           priority: props.task.priority,
           due_date: props.task.due_date ? props.task.due_date.slice(0, 19) : null,
         })
+      } else {
+        // 新建时必须先复位，否则紧接在编辑之后打开会留下上一条任务的字段
+        reset()
       }
     }
   },
@@ -118,17 +126,36 @@ async function submit() {
   }
   saving.value = true
   try {
-    const payload = { ...form }
-    if (!payload.due_date) payload.due_date = null
+    const payload = {
+      title: form.title.trim(),
+      description: form.description,
+      priority: form.priority,
+    }
     if (props.task) {
+      // PATCH 语义下 assignee_id / due_date 传 null 意为「本次不改」，
+      // 清空必须用显式的 clear_* 标志，否则删掉负责人再保存又会变回原样
+      if (isEmpty(form.assignee_id)) {
+        if (!isEmpty(props.task.assignee_id)) payload.clear_assignee = true
+      } else {
+        payload.assignee_id = form.assignee_id
+      }
+      if (isEmpty(form.due_date)) {
+        if (!isEmpty(props.task.due_date)) payload.clear_due_date = true
+      } else {
+        payload.due_date = form.due_date
+      }
       await taskApi.update(props.task.id, payload)
       ElMessage.success('任务已更新')
     } else {
+      payload.assignee_id = isEmpty(form.assignee_id) ? null : form.assignee_id
+      payload.due_date = isEmpty(form.due_date) ? null : form.due_date
       await taskApi.create(payload)
       ElMessage.success('任务已创建')
     }
     emit('update:modelValue', false)
     emit('saved')
+  } catch {
+    /* 拦截器已提示，保持弹窗打开以便用户修正 */
   } finally {
     saving.value = false
   }

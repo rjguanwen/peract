@@ -94,8 +94,13 @@ async function onCommand(cmd) {
     return
   }
   if (cmd === 'logout') {
-    await ElMessageBox.confirm('确定退出登录吗？', '提示', { type: 'warning' })
-    auth.logout()
+    try {
+      await ElMessageBox.confirm('确定退出登录吗？', '提示', { type: 'warning' })
+    } catch {
+      // 取消时 ElMessageBox 是 reject，不接住就是一条未处理的 Promise 异常
+      return
+    }
+    await auth.logout()
     router.push('/login')
   }
 }

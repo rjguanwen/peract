@@ -374,8 +374,11 @@ async function sendInvitesFor(emailList) {
     const results = data.results || []
     inviteResults.value = results
     const okCount = results.filter((r) => r.ok).length
+    // 取第一条成功结果判断发信模式：results[0] 可能是一条失败项，
+    // 用它会让开发模式下的文案错报成「已发送邮件」
+    const firstOk = results.find((r) => r.ok)
     if (okCount > 0) {
-      ElMessage.success(`已为 ${okCount} 个邮箱${results[0]?.dev ? '生成邀请链接' : '发送邀请邮件'}`)
+      ElMessage.success(`已为 ${okCount} 个邮箱${firstOk?.dev ? '生成邀请链接（未配置 SMTP）' : '发送邀请邮件'}`)
     }
     if (okCount === emailList.length) inviteEmails.value = ''
     loadInvites()

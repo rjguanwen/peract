@@ -120,8 +120,10 @@ async function load() {
   loading.value = true
   try {
     const data = await taskApi.list({ ...filters, mine: filters.mine || undefined })
-    items.value = data.items
-    total.value = data.total
+    items.value = Array.isArray(data?.items) ? data.items : []
+    total.value = Number(data?.total) || 0
+  } catch {
+    /* 拦截器已提示；不接住就是一条未处理的 Promise 异常 */
   } finally {
     loading.value = false
   }

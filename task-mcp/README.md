@@ -8,14 +8,24 @@
 cd task-mcp
 go build -o task-mcp.exe ./cmd/server
 
-# 运行（默认连接 localhost:8001，admin/admin123）
+# 凭据必须显式提供（无默认值，缺失则直接退出）
+$env:BACKEND_URL="http://localhost:8001"      # 默认即此值，可省
+$env:MCP_USERNAME="mcp-bot"
+$env:MCP_PASSWORD="****"
 ./task-mcp.exe
-
-# 自定义后端地址和凭证
-BACKEND_URL=http://localhost:8001 MCP_USERNAME=admin MCP_PASSWORD=admin123 ./task-mcp.exe
 ```
 
-## 可用工具（共 12 个）
+```bash
+# Linux/macOS 写法
+BACKEND_URL=http://localhost:8001 MCP_USERNAME=mcp-bot MCP_PASSWORD=xxxx ./task-mcp.exe
+```
+
+> 后端不提供默认口令：曾经内置的 `admin/admin123` 会让「忘记配置」静默变成一个能读写全部任务数据的管理员会话。
+> 建议为 MCP 单独建一个仅含所需权限的账号，不要复用管理员。
+
+令牌过期或后端重启导致会话失效时，客户端会自动重新登录并重试一次，无需重启 MCP 进程。
+
+## 可用工具（共 14 个）
 
 | 工具 | 说明 |
 |------|------|

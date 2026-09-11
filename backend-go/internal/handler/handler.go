@@ -1,45 +1,89 @@
 package handler
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
 	"taskbackend/internal/config"
 	"taskbackend/internal/middleware"
+	"taskbackend/internal/service"
 )
 
 type Handler struct {
 	db        *gorm.DB
 	cfg       *config.Config
 	auth      *middleware.Auth
+	notify    *service.Notifier
 	uploadDir string
+
+	// loginLimiter 按「IP + 用户名」统计失败次数，抵御口令爆破
+	loginLimiter *middleware.RateLimiter
+	// notifyLimiter 按「IP + 邮箱」限制找回密码等敏感接口的调用频次
+	notifyLimiter *middleware.RateLimiter
 }
 
-func New(db *gorm.DB, cfg *config.Config, auth *middleware.Auth) *Handler {
+func New(db *gorm.DB, cfg *config.Config, auth *middleware.Auth, notify *service.Notifier) *Handler {
 	dir, err := filepath.Abs(cfg.UploadDir)
 	if err != nil {
 		dir = cfg.UploadDir
 	}
-	_ = os.MkdirAll(dir, 0o755)
-	return &Handler{db: db, cfg: cfg, auth: auth, uploadDir: dir}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		// 上传目录不可用只影响头像，不阻断启动，但必须显式暴露原因
+		gin.DefaultWriter.Write([]byte("[warn] 创建上传目录失败，头像上传将不可用: " + err.Error() + "\n"))
+	}
+	return &Handler{
+		db:            db,
+		cfg:           cfg,
+		auth:          auth,
+		notify:        notify,
+		uploadDir:     dir,
+		loginLimiter:  middleware.NewRateLimiter(cfg.LoginFailLimit, cfg.LoginFailWindow),
+		notifyLimiter: middleware.NewRateLimiter(cfg.NotifyLimit, cfg.NotifyWindow),
+	}
 }
 
-// currentUser 从上下文获取当前登录用户
+// Close 回收后台限流协程。
+func (h *Handler) Close() {
+	h.loginLimiter.Stop()
+	h.notifyLimiter.Stop()
+}
+
+// currentUser 从上下文获取当前登录用户；中间件保证受保护路由上一定非空。
 func currentUser(c *gin.Context) *middleware.UserContext {
-	// 由 middleware 写入
-	v, ok := c.Get("user")
+	v, ok := c.Get(middleware.UserContextKey)
 	if !ok {
 		return nil
 	}
-	return v.(*middleware.UserContext)
+	u, ok := v.(*middleware.UserContext)
+	return u
+}
+
+// clientID 取真实来源标识。gin 的 ClientIP 只在配置了受信代理时才采信 X-Forwarded-For。
+func clientID(c *gin.Context) string {
+	return c.ClientIP()
+}
+
+// throttle 消费一次限流配额，超限则写入 429 并返回 false。
+func throttle(c *gin.Context, lim *middleware.RateLimiter, key string) bool {
+	if lim.Allow(key) {
+		return true
+	}
+	retry := int(lim.RetryAfter(key).Seconds())
+	if retry > 0 {
+		c.Header("Retry-After", strconv.Itoa(retry))
+	}
+	fail(c, http.StatusTooManyRequests, "操作过于频繁，请稍后再试")
+	return false
 }
 
 // RegisterRoutes 注册全部路由
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api/v1")
+	api := r.Group("/api/v1", middleware.BodySizeLimit(h.cfg.MaxBodyBytes))
 
 	// 公开接口
 	api.POST("/auth/login", h.Login)
@@ -71,6 +115,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	user.GET("/reminders", h.ListReminders)
 	user.GET("/reminders/unread-count", h.UnreadCount)
 	user.POST("/reminders", h.CreateReminder)
+	user.POST("/reminders/read-all", h.MarkAllRead)
 	user.POST("/reminders/:id/read", h.MarkRead)
 	user.GET("/stats/overview", h.Overview)
 

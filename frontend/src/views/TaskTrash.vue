@@ -52,8 +52,8 @@
               @confirm="restore(row)"
             >
               <template #reference>
-                <el-button type="primary" link>
-                  <el-icon><RefreshLeft /></el-icon>恢复
+                <el-button type="primary" link :loading="restoring === row.id">
+                  <el-icon v-if="restoring !== row.id"><RefreshLeft /></el-icon>恢复
                 </el-button>
               </template>
             </el-popconfirm>
@@ -83,6 +83,8 @@ import { formatDateTime, TASK_PRIORITIES } from '../utils/constants'
 const items = ref([])
 const total = ref(0)
 const loading = ref(false)
+// 记下正在恢复的任务行，避免恢复请求发出前重复点击（第二次会因已恢复而收到 400）
+const restoring = ref(null)
 
 const filters = reactive({
   priority: '',
@@ -95,8 +97,10 @@ async function load() {
   loading.value = true
   try {
     const data = await taskApi.deleted(filters)
-    items.value = data.items
-    total.value = data.total
+    items.value = Array.isArray(data?.items) ? data.items : []
+    total.value = Number(data?.total) || 0
+  } catch {
+    /* 拦截器已提示；不接住就是一条未处理的 Promise 异常 */
   } finally {
     loading.value = false
   }
@@ -113,9 +117,16 @@ function onPageChange(page) {
 }
 
 async function restore(row) {
-  await taskApi.restore(row.id)
-  ElMessage.success(`任务「${row.title}」已恢复`)
-  reload()
+  restoring.value = row.id
+  try {
+    await taskApi.restore(row.id)
+    ElMessage.success(`任务「${row.title}」已恢复`)
+    reload()
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    restoring.value = null
+  }
 }
 
 onMounted(load)

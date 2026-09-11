@@ -32,19 +32,19 @@ func invitationExpired(expiresAt time.Time) bool {
 	return time.Now().After(expiresAt)
 }
 
-// markInviteUsed 将该邮箱处于"待接受"的邀请标记为已使用
+// markInviteUsed 将该邮箱处于"待接受"的邀请标记为已使用。
+//
+// 失败不阻断注册流程：邀请链接绑定了邮箱、邮箱又有唯一索引，漏标只会让
+// 邀请列表状态显示滞后，不会被复用成第二个账号——但必须留日志，否则事后无从排查。
 func (h *Handler) markInviteUsed(email string) {
-	h.db.Model(&model.Invitation{}).
+	if err := h.db.Model(&model.Invitation{}).
 		Where("email = ? AND status = ?", email, model.InviteStatusPending).
 		Updates(map[string]interface{}{
 			"status":  model.InviteStatusRegistered,
 			"used_at": time.Now(),
-		})
-}
-
-// smtpConfigured SMTP 是否完成配置
-func (h *Handler) smtpConfigured() bool {
-	return h.cfg.SMTPHost != "" && h.cfg.SMTPUser != "" && h.cfg.SMTPFrom != ""
+		}).Error; err != nil {
+		log.Printf("[邀请注册] 标记邀请已使用失败（%s）：%v", email, err)
+	}
 }
 
 // InviteInfo GET /auth/invite/info 公开：校验邀请令牌并返回受邀邮箱与邀请人，供注册页预填
@@ -147,7 +147,12 @@ func (h *Handler) CreateInvites(c *gin.Context) {
 			continue
 		}
 		var count int64
-		h.db.Model(&model.User{}).Where("email = ?", email).Count(&count)
+		if err := h.db.Model(&model.User{}).Where("email = ?", email).Count(&count).Error; err != nil {
+			log.Printf("[邀请注册] 查重失败：%v", err)
+			res["reason"] = "校验邮箱失败"
+			results = append(results, res)
+			continue
+		}
 		if count > 0 {
 			res["reason"] = "该邮箱已注册"
 			results = append(results, res)
@@ -160,9 +165,8 @@ func (h *Handler) CreateInvites(c *gin.Context) {
 
 		var existing model.Invitation
 		hasExisting := h.db.Where("email = ?", email).First(&existing).Error == nil
-		snap := existing
 		if hasExisting {
-			if err := h.db.Model(&model.Invitation{}).Where("id = ?", existing.ID).Updates(map[string]interface{}{
+			if err := h.db.Model(&model.Invitation{}).Where("id = ?", existing.ID).Updates(map[string]any{
 				"token":      token,
 				"invited_by": ctx.ID,
 				"status":     model.InviteStatusPending,
@@ -170,6 +174,7 @@ func (h *Handler) CreateInvites(c *gin.Context) {
 				"created_at": existing.CreatedAt,
 				"used_at":    nil,
 			}).Error; err != nil {
+				log.Printf("[邀请注册] 更新邀请失败：%v", err)
 				res["reason"] = "保存邀请失败"
 				results = append(results, res)
 				continue
@@ -184,6 +189,7 @@ func (h *Handler) CreateInvites(c *gin.Context) {
 				CreatedAt: now,
 			}
 			if err := h.db.Create(inv).Error; err != nil {
+				log.Printf("[邀请注册] 新建邀请失败：%v", err)
 				res["reason"] = "保存邀请失败"
 				results = append(results, res)
 				continue
@@ -192,7 +198,7 @@ func (h *Handler) CreateInvites(c *gin.Context) {
 
 		inviteURL := strings.TrimRight(h.cfg.AppBaseURL, "/") + "/register?invite=" + token
 
-		if !h.smtpConfigured() {
+		if !h.cfg.SMTPConfigured() {
 			// 开发模式：未配置 SMTP，不真实发信，直接返回邀请链接便于本地测试
 			log.Println("[邀请注册] 未配置 SMTP，开发模式生成邀请链接：", inviteURL)
 			res["ok"] = true
@@ -202,28 +208,13 @@ func (h *Handler) CreateInvites(c *gin.Context) {
 			continue
 		}
 
+		// 邮件交给后台队列：批量邀请最多 20 个邮箱，同步发信会把这个请求
+		// 挂到 SMTP 超时上限（20s × 20）直到前端代理断线。发信失败时邀请记录仍在，
+		// 管理员重邀同一邮箱会复用原行，不留脏数据。
 		subject := "「躬行」邀请你加入"
 		body := "你好：\n\n" + meName + " 邀请你加入「躬行」（Peract，任务管理）。\n\n请打开以下链接完成注册（链接 7 天内有效，且仅限本邮件送达的邮箱 " +
 			email + " 使用）：\n\n" + inviteURL + "\n\n如非本人操作，请忽略此邮件。"
-		if err := service.SendEmail(h.cfg, email, subject, body); err != nil {
-			log.Printf("[邀请注册] 发送邀请邮件失败：%v", err)
-			// 回滚：新建的删除记录，已存在的恢复其原状态，避免留下不可达的邀请
-			if hasExisting {
-				h.db.Model(&model.Invitation{}).Where("id = ?", existing.ID).Updates(map[string]interface{}{
-					"token":      snap.Token,
-					"invited_by": snap.InvitedBy,
-					"status":     snap.Status,
-					"expires_at": snap.ExpiresAt,
-					"created_at": snap.CreatedAt,
-					"used_at":    snap.UsedAt,
-				})
-			} else {
-				h.db.Delete(&model.Invitation{}, "token = ?", token)
-			}
-			res["reason"] = "邮件发送失败：" + err.Error()
-			results = append(results, res)
-			continue
-		}
+		h.notify.Enqueue(service.TaskNotice{Title: subject, Content: body, EmailTo: email})
 
 		res["ok"] = true
 		results = append(results, res)

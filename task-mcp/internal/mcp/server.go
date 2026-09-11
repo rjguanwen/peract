@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -72,11 +73,12 @@ func (s *Server) Run() error {
 
 	for {
 		line, err := reader.ReadBytes('\n')
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
+		if err != nil && err != io.EOF {
 			return fmt.Errorf("读取 stdin 失败: %w", err)
+		}
+		// EOF 时仍可能带着一段没有结尾换行的数据，直接 return 会丢掉最后一条请求
+		if err == io.EOF && len(line) == 0 {
+			return nil
 		}
 
 		lineStr := strings.TrimSpace(string(line))
@@ -90,11 +92,8 @@ func (s *Server) Run() error {
 			continue
 		}
 
-		// 忽略通知（无 id）
+		// 通知（无 id）一律不回应，这是 JSON-RPC 与 MCP 共同的约定
 		if req.ID == nil {
-			if req.Method == "notifications/initialized" {
-				continue
-			}
 			continue
 		}
 
@@ -127,17 +126,26 @@ func (s *Server) handle(req jsonRPCRequest, writer io.Writer) error {
 		}
 		return s.sendResult(writer, req.ID, result)
 
+	// ping 是客户端的心跳探活，不回应会被当作服务不可用而断开
+	case "ping":
+		return s.sendResult(writer, req.ID, struct{}{})
+
 	case "tools/list":
 		defs := make([]types.ToolDefinition, 0, len(s.tools))
 		for _, t := range s.tools {
 			defs = append(defs, t.Definition())
 		}
+		// 固定排序：map 遍历顺序随机，不排序的话每次 tools/list 返回的工具顺序都不同，
+		// 会破坏客户端缓存与提示词前缀复用
+		sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name })
 		return s.sendResult(writer, req.ID, toolsListResult{Tools: defs})
 
 	case "tools/call":
 		var params toolsCallParams
-		if req.Params != nil {
-			json.Unmarshal(req.Params, &params)
+		if len(req.Params) > 0 {
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				return s.sendError(writer, req.ID, -32602, "params 解析失败: "+err.Error())
+			}
 		}
 		tool, ok := s.tools[params.Name]
 		if !ok {

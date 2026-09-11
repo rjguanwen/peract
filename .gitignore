@@ -1,14 +1,3 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-env/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
 # 环境变量
 .env
 !.env.example
@@ -23,13 +12,26 @@ dist/
 .vscode/
 *.swp
 
-# 数据库文件
+# 数据库文件（WAL 模式的两个伴生文件必须一并忽略，只拷主库会丢最近写入）
 *.db
 *.sqlite3
+*.db-wal
+*.db-shm
+*.db-journal
+
+# 上传的运行时数据（头像等）：属于用户内容，不入库
+backend-go/uploads/
 
 # 日志
 *.log
 
-# 编写生成的可执行文件
+# 编译生成的可执行文件
 *.exe
 task-mcp/task-mcp.exe
+backend-go/task-server
+backend-go/task-server-*
+
+# Go 测试与覆盖率产物
+*.test
+coverage.out
+coverage.html

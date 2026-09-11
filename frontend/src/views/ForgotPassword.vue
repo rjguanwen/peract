@@ -21,11 +21,25 @@
 
       <!-- 第二步：重置方式 -->
       <template v-else>
+        <!-- 无论邮箱是否注册后端都回同一形结构，这里不能直接断言「该邮箱已注册」，
+             否则这个页面又变回一个账号枚举器 -->
         <el-alert type="info" :closable="false" class="mb-12">
           <template #title>
-            该邮箱已注册{{ account.password_hint ? '，密码提示词：' + account.password_hint : '' }}
+            <template v-if="account.exists">
+              该邮箱已注册{{ account.password_hint ? '，密码提示词：' + account.password_hint : '' }}
+            </template>
+            <template v-else>若该邮箱已注册，可通过下面的方式重置密码；未注册邮箱不会收到任何邮件。</template>
           </template>
         </el-alert>
+
+        <el-alert
+          v-if="account.answer_legacy"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="mb-12"
+          title="该账号的安全答案是旧版明文存储，已停止使用。请登录在「个人设置」重新设置安全问答，或改用邮箱链接重置。"
+        />
 
         <!-- 问答重置 -->
         <div v-if="account.has_security" class="panel">
@@ -50,13 +64,13 @@
         <!-- 邮箱链接重置 -->
         <div class="panel">
           <div class="panel-title">方式二：通过邮箱链接重置</div>
-          <p class="panel-desc">我们将向注册邮箱发送一封包含重置链接的邮件（30 分钟内有效）。</p>
+          <p class="panel-desc">我们将向注册邮箱发送一封包含重置链接的邮件（{{ RESET_LINK_TTL }}内有效）。</p>
           <el-button type="primary" plain :loading="mailLoading" @click="sendMail">发送重置邮件</el-button>
           <el-alert v-if="devUrl" type="warning" :closable="false" class="dev-box" show-icon>
             <template #title>开发模式：SMTP 未配置，请使用以下重置链接</template>
             <div class="dev-link">{{ devUrl }}</div>
           </el-alert>
-          <div v-if="mailSent" class="ok-text">重置邮件已发送，请查收。</div>
+          <div v-if="mailSent" class="ok-text">若该邮箱已注册，重置邮件已发出，请在 {{ RESET_LINK_TTL }}内打开链接。</div>
         </div>
       </template>
 
@@ -75,6 +89,8 @@ import { Key, Message } from '@element-plus/icons-vue'
 import { authApi } from '../api'
 
 const router = useRouter()
+// 与后端 resetLinkTTLHint 保持一致，改一边要同步改另一边
+const RESET_LINK_TTL = '30 分钟'
 const formRef = ref()
 const loadingLookup = ref(false)
 const qaLoading = ref(false)
@@ -138,8 +154,9 @@ async function sendMail() {
     if (data.dev) {
       devUrl.value = data.reset_url
     } else {
+      // 邮箱未注册时后端也回 sent:true，提示文案不能变成「已发送」以外的断言
       mailSent.value = true
-      ElMessage.success('重置邮件已发送')
+      ElMessage.success('若该邮箱已注册，重置邮件已发送，请查收')
     }
   } catch {
     /* 拦截器已提示 */

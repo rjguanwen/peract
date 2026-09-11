@@ -92,12 +92,16 @@ function priorityPercent(value) {
 }
 
 async function load() {
-  const [s, t] = await Promise.all([
-    statsApi.overview(),
-    taskApi.list({ mine: true, page_size: 10 }),
-  ])
-  stats.value = s
-  myTasks.value = t.items
+  try {
+    const [s, t] = await Promise.all([
+      statsApi.overview(),
+      taskApi.list({ mine: true, page_size: 10 }),
+    ])
+    stats.value = s || {}
+    myTasks.value = Array.isArray(t?.items) ? t.items : []
+  } catch {
+    /* 拦截器已提示；不接住就是一条未处理的 Promise 异常 */
+  }
 }
 
 onMounted(load)

@@ -9,8 +9,8 @@ type Tool interface {
 
 // ToolDefinition MCP 工具元数据
 type ToolDefinition struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
 	InputSchema ToolInputSchema `json:"inputSchema"`
 }
 

@@ -2,8 +2,8 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -37,6 +37,7 @@ func (h *Handler) ListUsers(c *gin.Context) {
 	for i := range users {
 		out = append(out, toUserOut(&users[i]))
 	}
+	// 返回裸数组是本接口已有的前端契约（UserManage/TaskFormDialog 直接当数组用），保持不变
 	c.JSON(http.StatusOK, out)
 }
 
@@ -50,6 +51,10 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	req.Username = strings.TrimSpace(req.Username)
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	req.FullName = strings.TrimSpace(req.FullName)
+	if len(req.Username) > maxUsernameLen || len(req.Email) > maxEmailLen || len(req.FullName) > maxFullNameLen {
+		badRequest(c, "用户名、邮箱或姓名过长")
+		return
+	}
 	if !usernameRe.MatchString(req.Username) {
 		badRequest(c, "用户名只能包含字母、数字、下划线、点、横线")
 		return
@@ -70,14 +75,21 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	if role == "" {
 		role = model.RoleUser
 	}
-	var count int64
-	h.db.Model(&model.User{}).Where("username = ?", req.Username).Count(&count)
-	if count > 0 {
+	usernameTaken, err := h.exists(&model.User{}, "username = ?", req.Username)
+	if err != nil {
+		failInternal(c, "创建用户查重", err, "创建用户失败")
+		return
+	}
+	if usernameTaken {
 		badRequest(c, "用户名已存在")
 		return
 	}
-	h.db.Model(&model.User{}).Where("email = ?", req.Email).Count(&count)
-	if count > 0 {
+	emailTaken, err := h.exists(&model.User{}, "email = ?", req.Email)
+	if err != nil {
+		failInternal(c, "创建用户查重", err, "创建用户失败")
+		return
+	}
+	if emailTaken {
 		badRequest(c, "邮箱已被注册")
 		return
 	}
@@ -93,7 +105,7 @@ func (h *Handler) CreateUser(c *gin.Context) {
 // 保护规则：不能修改管理员账号的角色或启用状态；不能修改自己的角色或启用状态。
 func (h *Handler) UpdateUser(c *gin.Context) {
 	ctx := currentUser(c)
-	id, err := strconv.Atoi(c.Param("id"))
+	id, err := parseIDParam(c)
 	if err != nil {
 		badRequest(c, "用户 ID 不合法")
 		return
@@ -137,9 +149,12 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 			badRequest(c, "邮箱格式不正确")
 			return
 		}
-		var count int64
-		h.db.Model(&model.User{}).Where("email = ? AND id != ?", email, user.ID).Count(&count)
-		if count > 0 {
+		dup, err := h.exists(&model.User{}, "email = ? AND id != ?", email, user.ID)
+		if err != nil {
+			failInternal(c, "更新用户查重", err, "更新用户失败")
+			return
+		}
+		if dup {
 			badRequest(c, "邮箱已被注册")
 			return
 		}
@@ -162,6 +177,9 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 			fail(c, http.StatusInternalServerError, "设置密码失败")
 			return
 		}
+		// 管理员重置口令同样作废旧会话，否则被监守的会话不会因重置而断开
+		changedAt := time.Now().UTC().Truncate(time.Second)
+		user.PasswordChangedAt = &changedAt
 	}
 	if req.IsActive != nil {
 		user.IsActive = *req.IsActive

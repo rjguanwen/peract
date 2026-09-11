@@ -66,10 +66,19 @@ async function onSubmit() {
   try {
     await auth.login(form.username, form.password)
     ElMessage.success('登录成功')
-    router.push(route.query.redirect || '/')
+    router.push(safeRedirect(route.query.redirect))
+  } catch {
+    /* 拦截器已提示（含 429 限流倒计时） */
   } finally {
     loading.value = false
   }
+}
+
+// 只接受站内绝对路径；//evil.com 这种以双斜杠开头的会被当成协议相对地址解析
+function safeRedirect(target) {
+  if (typeof target !== 'string') return '/'
+  if (!target.startsWith('/') || target.startsWith('//') || target.startsWith('/\\')) return '/'
+  return target
 }
 </script>
 

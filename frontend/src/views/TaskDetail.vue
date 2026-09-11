@@ -254,7 +254,9 @@ async function load() {
     const data = await taskApi.get(route.params.id)
     task.value = data
     const reminderData = await reminderApi.list({ page_size: 50 })
-    reminders.value = reminderData.items.filter((r) => r.task_id === data.id)
+    reminders.value = (Array.isArray(reminderData?.items) ? reminderData.items : []).filter(
+      (r) => r.task_id === data.id,
+    )
   } catch (e) {
     /* 404 已由拦截器提示 */
   } finally {
@@ -263,13 +265,23 @@ async function load() {
 }
 
 async function changeStatus(status) {
-  await taskApi.update(task.value.id, { status })
+  try {
+    await taskApi.update(task.value.id, { status })
+  } catch {
+    /* 拦截器已提示；失败时不能报「已更新」并留下假状态 */
+    return
+  }
   ElMessage.success('状态已更新')
   load()
 }
 
 async function remove() {
-  await taskApi.remove(task.value.id)
+  try {
+    await taskApi.remove(task.value.id)
+  } catch {
+    /* 拦截器已提示 */
+    return
+  }
   ElMessage.success('任务已删除')
   router.push('/tasks')
 }
@@ -286,6 +298,8 @@ async function submitProgress() {
     showProgressDialog.value = false
     Object.assign(progressForm, { status: '', progress: 0, comment: '' })
     load()
+  } catch {
+    /* 拦截器已提示，保持弹窗打开 */
   } finally {
     saving.value = false
   }
@@ -307,6 +321,8 @@ async function submitReminder() {
     showReminderDialog.value = false
     Object.assign(reminderForm, { remind_at: '', message: '' })
     load()
+  } catch {
+    /* 拦截器已提示，保持弹窗打开 */
   } finally {
     savingReminder.value = false
   }

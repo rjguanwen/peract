@@ -138,6 +138,10 @@ export const taskApi = {
   addProgress: (id, data) => api.post(`/tasks/${id}/progress`, data),
   deleted: (params) => api.get('/tasks/deleted', { params }),
   restore: (id) => api.post(`/tasks/${id}/restore`),
+  // 任务分享
+  listShares: (taskId) => api.get(`/tasks/${taskId}/shares`),
+  addShare: (taskId, inviteeEmail) => api.post(`/tasks/${taskId}/shares`, { invitee_email: inviteeEmail }),
+  revokeShare: (taskId, shareId) => api.delete(`/tasks/${taskId}/shares/${shareId}`),
 }
 
 // ===== 提醒 =====

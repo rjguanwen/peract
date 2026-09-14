@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"taskbackend/internal/model"
 )
@@ -14,9 +15,21 @@ import (
 // 看板每次刷新都要跑一遍这里。原实现是 8 条独立 COUNT，SQLite 单写锁下
 // 这些查询会串行排队；改为 3 条条件聚合（CASE WHEN）后往返次数降到三分之一，
 // 且同一批数据在一次扫描内得出，避免了并发写入时各计数彼此不一致。
+// 权限范围：非管理员只看 creator_id=me OR assignee_id=me OR 被分享的任务。
 func (h *Handler) Overview(c *gin.Context) {
 	ctx := currentUser(c)
+	isAdmin := ctx.Role == model.RoleAdmin
 	now := time.Now()
+
+	// 权限范围子查询（用于 WHERE 子句注入）
+	visScope := func(q *gorm.DB) *gorm.DB {
+		if isAdmin {
+			return q
+		}
+		return q.Where(
+			"(creator_id = ? OR assignee_id = ? OR id IN (SELECT task_id FROM task_shares WHERE user_id = ?))",
+			ctx.ID, ctx.ID, ctx.ID)
+	}
 
 	var global struct {
 		Total      int64
@@ -25,7 +38,7 @@ func (h *Handler) Overview(c *gin.Context) {
 		Done       int64
 		Overdue    int64
 	}
-	if err := h.db.Model(&model.Task{}).
+	if err := visScope(h.db.Model(&model.Task{})).
 		Select(`COUNT(*) AS total,
 			SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS todo,
 			SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS in_progress,
@@ -42,7 +55,7 @@ func (h *Handler) Overview(c *gin.Context) {
 		Pending int64
 		Overdue int64
 	}
-	if err := h.db.Model(&model.Task{}).
+	if err := visScope(h.db.Model(&model.Task{})).
 		Select(`COUNT(*) AS pending,
 			SUM(CASE WHEN due_date IS NOT NULL AND due_date < ? THEN 1 ELSE 0 END) AS overdue`, now).
 		Where("assignee_id = ? AND status <> ?", ctx.ID, model.StatusDone).
@@ -56,7 +69,7 @@ func (h *Handler) Overview(c *gin.Context) {
 		Count int64
 	}
 	var rows []kv
-	if err := h.db.Model(&model.Task{}).
+	if err := visScope(h.db.Model(&model.Task{})).
 		Select("priority AS key, COUNT(*) AS count").
 		Group("priority").Scan(&rows).Error; err != nil {
 		fail(c, http.StatusInternalServerError, "统计失败")

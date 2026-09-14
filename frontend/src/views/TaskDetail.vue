@@ -6,6 +6,7 @@
         <el-tag v-if="task?.is_overdue" type="danger" effect="dark" class="ml">已逾期</el-tag>
       </template>
       <template #extra>
+        <el-button v-if="canShare" @click="showShareDialog = true">分享</el-button>
         <el-button v-if="canEdit" @click="openEdit">编辑</el-button>
         <el-popconfirm v-if="canDelete" title="确定删除该任务吗？删除后可在回收站中恢复" @confirm="remove">
           <template #reference>
@@ -105,6 +106,31 @@
 
         <el-col :span="8">
           <el-card shadow="never">
+            <template #header>任务分享</template>
+            <div v-if="!shares.length && !canShare" class="empty">暂无分享</div>
+            <div v-if="shares.length" class="share-list">
+              <div v-for="s in shares" :key="s.id" class="share-item">
+                <UserAvatar :src="s.avatar_url" :name="s.full_name || s.username" :size="26" />
+                <div class="share-info">
+                  <div class="share-name">{{ s.full_name || s.username }}</div>
+                  <div class="share-email">{{ s.email }}</div>
+                </div>
+                <el-button
+                  v-if="canShare"
+                  link
+                  type="danger"
+                  size="small"
+                  :loading="revokingId === s.id"
+                  @click="revokeShare(s)"
+                >取消</el-button>
+              </div>
+            </div>
+            <el-button v-if="canShare" size="small" class="share-add-btn" @click="showShareDialog = true">
+              + 分享给其他人
+            </el-button>
+          </el-card>
+
+          <el-card shadow="never" class="row">
             <template #header>提醒</template>
             <div v-if="!reminders.length" class="empty">暂无提醒</div>
             <div v-for="r in reminders" :key="r.id" class="reminder-item">
@@ -172,6 +198,24 @@
         <el-button type="primary" :loading="savingReminder" @click="submitReminder">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 分享任务 -->
+    <el-dialog v-model="showShareDialog" title="分享任务" width="420px">
+      <p class="share-hint">被分享者将可以在其任务列表中查看此任务。</p>
+      <el-form label-width="80px">
+        <el-form-item label="被分享者邮箱">
+          <el-input
+            v-model="shareEmail"
+            placeholder="输入对方的注册邮箱"
+            @keyup.enter="submitShare"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showShareDialog = false">取消</el-button>
+        <el-button type="primary" :loading="sharing" @click="submitShare">确认分享</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -183,6 +227,7 @@ import { reminderApi, taskApi } from '../api'
 import StatusTag from '../components/StatusTag.vue'
 import PriorityTag from '../components/PriorityTag.vue'
 import TaskFormDialog from '../components/TaskFormDialog.vue'
+import UserAvatar from '../components/UserAvatar.vue'
 import { useAuthStore } from '../stores/auth'
 import { ACTION_LABELS, formatDateTime, statusMeta } from '../utils/constants'
 
@@ -192,12 +237,17 @@ const auth = useAuthStore()
 
 const task = ref(null)
 const reminders = ref([])
+const shares = ref([])
 const loading = ref(false)
 const saving = ref(false)
 const savingReminder = ref(false)
 const editVisible = ref(false)
 const showProgressDialog = ref(false)
 const showReminderDialog = ref(false)
+const showShareDialog = ref(false)
+const shareEmail = ref('')
+const sharing = ref(false)
+const revokingId = ref(null)
 
 const progressForm = reactive({ status: '', progress: 0, comment: '' })
 const reminderForm = reactive({ remind_at: '', message: '' })
@@ -229,6 +279,12 @@ const canDelete = computed(() => {
 const canEdit = computed(() => {
   if (!task.value) return false
   return auth.isAdmin || task.value.creator_id === auth.user?.id
+})
+
+// 分享权限：仅任务创建者（管理员不能替别人分享）
+const canShare = computed(() => {
+  if (!task.value) return false
+  return task.value.creator_id === auth.user?.id
 })
 
 function statusLabel(value) {
@@ -328,7 +384,51 @@ async function submitReminder() {
   }
 }
 
-onMounted(load)
+async function loadShares() {
+  if (!task.value) return
+  try {
+    shares.value = await taskApi.listShares(task.value.id)
+  } catch {
+    shares.value = []
+  }
+}
+
+async function submitShare() {
+  if (!shareEmail.value.trim()) {
+    ElMessage.warning('请输入被分享者的邮箱')
+    return
+  }
+  sharing.value = true
+  try {
+    await taskApi.addShare(task.value.id, shareEmail.value.trim())
+    ElMessage.success('分享成功')
+    shareEmail.value = ''
+    showShareDialog.value = false
+    await loadShares()
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    sharing.value = false
+  }
+}
+
+async function revokeShare(share) {
+  revokingId.value = share.id
+  try {
+    await taskApi.revokeShare(task.value.id, share.id)
+    ElMessage.success('已取消分享')
+    await loadShares()
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    revokingId.value = null
+  }
+}
+
+onMounted(() => {
+  load()
+  loadShares()
+})
 </script>
 
 <style scoped>
@@ -394,5 +494,44 @@ onMounted(load)
   align-items: center;
   font-size: 12px;
   color: #9ca3af;
+}
+.share-hint {
+  margin: 0 0 16px;
+  color: #6b7280;
+  font-size: 13px;
+}
+.share-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.share-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.share-info {
+  flex: 1;
+  min-width: 0;
+}
+.share-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.share-email {
+  font-size: 11px;
+  color: #9ca3af;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.share-add-btn {
+  width: 100%;
+  border-style: dashed;
 }
 </style>

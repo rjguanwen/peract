@@ -102,8 +102,13 @@ func Migrate(db *gorm.DB) error {
 		&model.Reminder{},
 		&model.SystemSetting{},
 		&model.Invitation{},
+		&model.TaskShare{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
+	}
+	// 联合唯一约束：同一任务同一用户不允许重复分享
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_task_shares_task_user ON task_shares (task_id, user_id)").Error; err != nil {
+		return fmt.Errorf("create task_shares unique index: %w", err)
 	}
 	return nil
 }

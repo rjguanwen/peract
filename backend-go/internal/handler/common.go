@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"taskbackend/internal/model"
 )
 
 // rawLikeClause 关键词检索子句。SQLite 的 LIKE 默认不区分 ASCII 大小写，
@@ -19,9 +21,11 @@ type taskFilters struct {
 	status      string
 	priority    string
 	assigneeID  string
+	creatorID   string
 	keyword     string
 	overdueOnly bool
 	mine        bool
+	visibility  string // "mine"(默认)/"all"，非管理员只能看自己的任务
 }
 
 // parseIDParam 解析路径中的 :id，非正整数一律报错。
@@ -86,4 +90,26 @@ func (h *Handler) exists(dest any, query string, args ...any) (bool, error) {
 func failInternal(c *gin.Context, where string, err error, msg string) {
 	log.Printf("[%s] %v", where, err)
 	fail(c, http.StatusInternalServerError, msg)
+}
+
+// canViewTask 判断用户是否对任务有查看权限：admin / 创建者 / 被分配人 / 被分享者。
+func (h *Handler) canViewTask(c *gin.Context, taskID uint) bool {
+	ctx := currentUser(c)
+	if ctx == nil {
+		return false
+	}
+	if ctx.Role == model.RoleAdmin {
+		return true
+	}
+	var task model.Task
+	if err := h.db.Select("creator_id, assignee_id").First(&task, taskID).Error; err != nil {
+		return false
+	}
+	if (task.CreatorID != nil && *task.CreatorID == ctx.ID) ||
+		(task.AssigneeID != nil && *task.AssigneeID == ctx.ID) {
+		return true
+	}
+	var cnt int64
+	h.db.Model(&model.TaskShare{}).Where("task_id = ? AND user_id = ?", taskID, ctx.ID).Count(&cnt)
+	return cnt > 0
 }

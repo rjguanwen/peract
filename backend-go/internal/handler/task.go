@@ -332,19 +332,36 @@ func statusNotices(t *model.Task, targetID uint, message string) ([]model.Remind
 }
 
 // ListTasks GET /tasks
+// visibility=mine（默认）：非管理员只能看到自己创建的/分配给自己的/被分享的任务
+// visibility=all（仅管理员）：可看所有任务
+// ?mine=true 沿用兼容旧行为，等效于 visibility=mine
+// ?creator_id= 可进一步按创建者筛选（管理员用）
 func (h *Handler) ListTasks(c *gin.Context) {
 	ctx := currentUser(c)
+
+	isAdmin := ctx.Role == model.RoleAdmin
+
+	// visibility：mine / all；mine=true 向后兼容映射到 mine
+	vis := c.Query("visibility")
+	if vis == "" && c.Query("mine") == "true" {
+		vis = "mine"
+	}
+	if vis == "" {
+		vis = "mine"
+	}
+	if vis == "all" && !isAdmin {
+		forbidden(c, "仅管理员可查看全部任务")
+		return
+	}
 
 	filters := taskFilters{
 		status:      c.Query("status"),
 		priority:    c.Query("priority"),
 		assigneeID:  c.Query("assignee_id"),
+		creatorID:   c.Query("creator_id"),
 		keyword:     c.Query("keyword"),
 		overdueOnly: c.Query("overdue_only") == "true",
-		mine:        c.Query("mine") == "true",
-	}
-	if filters.mine {
-		filters.assigneeID = strconv.FormatUint(uint64(ctx.ID), 10)
+		visibility:  vis,
 	}
 	if filters.status != "" && !validStatus(filters.status) {
 		badRequest(c, "状态筛选值不合法")
@@ -357,9 +374,17 @@ func (h *Handler) ListTasks(c *gin.Context) {
 
 	page, pageSize := parsePagination(c)
 
-	// count 与 find 使用相互独立的会话，避免 Order/Limit 污染 COUNT 语句
-	build := func() *gorm.DB {
+	// buildQuery 组装查询条件，自动注入权限范围
+	buildQuery := func() *gorm.DB {
 		q := h.db.Model(&model.Task{})
+
+		// --- 权限范围 ---
+		if !isAdmin {
+			// 非管理员：只看 creator_id=me OR assignee_id=me OR 被分享的任务
+			q = q.Where("(creator_id = ? OR assignee_id = ? OR id IN (SELECT task_id FROM task_shares WHERE user_id = ?))",
+				ctx.ID, ctx.ID, ctx.ID)
+		}
+
 		if filters.status != "" {
 			q = q.Where("status = ?", filters.status)
 		}
@@ -369,6 +394,16 @@ func (h *Handler) ListTasks(c *gin.Context) {
 		if filters.assigneeID != "" {
 			if id, err := strconv.Atoi(filters.assigneeID); err == nil && id > 0 {
 				q = q.Where("assignee_id = ?", id)
+			}
+		}
+		// creator_id 筛选：管理员可按创建者查，非管理员只能查自己（已在权限范围约束）
+		if filters.creatorID != "" {
+			if id, err := strconv.Atoi(filters.creatorID); err == nil && id > 0 {
+				if isAdmin {
+					q = q.Where("creator_id = ?", id)
+				} else if id == int(ctx.ID) {
+					q = q.Where("creator_id = ?", id)
+				} // 非管理员查其他创建者 → 静默忽略，维持自己的可见范围
 			}
 		}
 		if filters.keyword != "" {
@@ -382,14 +417,14 @@ func (h *Handler) ListTasks(c *gin.Context) {
 	}
 
 	var total int64
-	if err := build().Count(&total).Error; err != nil {
+	if err := buildQuery().Count(&total).Error; err != nil {
 		fail(c, http.StatusInternalServerError, "查询任务失败")
 		return
 	}
 
 	var tasks []model.Task
-	if err := build().Preload("Assignee").Preload("Creator").
-		Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&tasks).Error; err != nil {
+	if err := buildQuery().Preload("Assignee").Preload("Creator").
+		Order("created_at DESC").Offset((page-1)*pageSize).Limit(pageSize).Find(&tasks).Error; err != nil {
 		fail(c, http.StatusInternalServerError, "查询任务失败")
 		return
 	}
@@ -411,6 +446,11 @@ func (h *Handler) GetTask(c *gin.Context) {
 	var task model.Task
 	if err := h.db.Preload("Assignee").Preload("Creator").First(&task, id).Error; err != nil {
 		notFound(c, "任务不存在")
+		return
+	}
+	// 权限检查：admin/创建者/负责人/被分享者才可查看
+	if !h.canViewTask(c, uint(id)) {
+		forbidden(c, "你没有查看此任务的权限")
 		return
 	}
 	var progresses []model.TaskProgress

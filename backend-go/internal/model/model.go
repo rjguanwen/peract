@@ -186,6 +186,18 @@ type Invitation struct {
 	UsedAt    *time.Time `json:"used_at"` // 实际完成注册的时间
 }
 
+// TaskShare 任务分享记录（创建者可将自己的任务分享给其他用户查看）
+type TaskShare struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	TaskID     uint      `gorm:"index;not null" json:"task_id"`
+	UserID     uint      `gorm:"index;not null" json:"user_id"` // 被分享者
+	GrantedBy  uint      `gorm:"not null" json:"granted_by"`     // 分享人（必须是任务创建者）
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// TaskShareUnique 同一任务同一用户不允许重复分享（联合唯一约束）
+func (TaskShare) TableName() string { return "task_shares" }
+
 // 邀请状态
 const (
 	InviteStatusPending    = "pending"    // 待接受

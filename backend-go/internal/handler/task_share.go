@@ -12,8 +12,8 @@ import (
 
 // shareTaskReq 分享任务请求
 type shareTaskReq struct {
-	TaskID    uint   `json:"task_id" binding:"required"`
-	UserID    uint   `json:"user_id" binding:"required"`
+	TaskID       uint   `json:"task_id" binding:"required"`
+	UserID       uint   `json:"user_id" binding:"required"`
 	InviteeEmail string `json:"invitee_email" binding:"required,email"` // 通过邮箱查找用户
 }
 
@@ -31,7 +31,7 @@ func (h *Handler) ListShares(c *gin.Context) {
 		notFound(c, "任务不存在")
 		return
 	}
-	if (task.CreatorID == nil || *task.CreatorID != ctx.ID) && ctx.Role != model.RoleAdmin {
+	if (task.CreatorID == nil || *task.CreatorID != ctx.ID) && !can(c, PermTaskListAll) {
 		forbidden(c, "仅任务创建者可查看分享列表")
 		return
 	}
@@ -45,13 +45,13 @@ func (h *Handler) ListShares(c *gin.Context) {
 			continue
 		}
 		out = append(out, gin.H{
-			"id":           s.ID,
-			"task_id":      s.TaskID,
-			"user_id":      s.UserID,
-			"username":     user.Username,
-			"full_name":    user.FullName,
-			"email":        user.Email,
-			"shared_at":    s.CreatedAt,
+			"id":        s.ID,
+			"task_id":   s.TaskID,
+			"user_id":   s.UserID,
+			"username":  user.Username,
+			"full_name": user.FullName,
+			"email":     user.Email,
+			"shared_at": s.CreatedAt,
 		})
 	}
 	if out == nil {
@@ -83,7 +83,7 @@ func (h *Handler) AddShare(c *gin.Context) {
 		notFound(c, "任务不存在")
 		return
 	}
-	if (task.CreatorID == nil || *task.CreatorID != ctx.ID) && ctx.Role != model.RoleAdmin {
+	if (task.CreatorID == nil || *task.CreatorID != ctx.ID) && !can(c, PermTaskListAll) {
 		forbidden(c, "仅任务创建者可分享任务")
 		return
 	}
@@ -101,11 +101,13 @@ func (h *Handler) AddShare(c *gin.Context) {
 		return
 	}
 
-	// 不能分享给管理员（管理员已有全部权限）
-	if invitee.Role == model.RoleAdmin {
-		badRequest(c, "管理员已有全部任务权限，无需分享")
-		return
-	}
+	// 这里原来有一条"不能分享给管理员"。它没了, 而且**不是遗漏**:
+	// 被分享人是不是已经能看见全部任务, 取决于平台侧的角色授权(sys_user_role),
+	// 应用侧拿不到 —— 本地档案里没有任何权限信息。而一条多余的分享行没有危害:
+	// 它只是让这个人多一个可见任务, 而他本来就看得见。
+	//
+	// 真要判, 就得为每一次分享回平台查一次被分享人的权限。那既多一次网络往返,
+	// 又把"谁能看见什么"这个判断分散到了两处 —— 而分散的那两处迟早会不一致。
 
 	share := model.TaskShare{
 		TaskID:    uint(taskID),
@@ -144,7 +146,7 @@ func (h *Handler) RevokeShare(c *gin.Context) {
 		notFound(c, "任务不存在")
 		return
 	}
-	if (task.CreatorID == nil || *task.CreatorID != ctx.ID) && ctx.Role != model.RoleAdmin {
+	if (task.CreatorID == nil || *task.CreatorID != ctx.ID) && !can(c, PermTaskListAll) {
 		forbidden(c, "仅任务创建者可撤销分享")
 		return
 	}

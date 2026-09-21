@@ -54,7 +54,7 @@ func countSent(t *testing.T, db *gorm.DB) int64 {
 func TestCheckRemindersClaimsOnlyDueUnsent(t *testing.T) {
 	db := newTestDB(t)
 	now := time.Now()
-	user := model.NewUser("u1", "u1@test.local", "pw123456", model.RoleUser, "成员")
+	user := model.NewUser("u1", "u1@test.local", "成员")
 	if err := db.Create(user).Error; err != nil {
 		t.Fatalf("建用户: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestCheckRemindersClaimsOnlyDueUnsent(t *testing.T) {
 
 func TestCheckRemindersRespectsBatchLimit(t *testing.T) {
 	db := newTestDB(t)
-	user := model.NewUser("u1", "u1@test.local", "pw123456", model.RoleUser, "成员")
+	user := model.NewUser("u1", "u1@test.local", "成员")
 	if err := db.Create(user).Error; err != nil {
 		t.Fatalf("建用户: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestCheckRemindersDeliversOnceAcrossRuns(t *testing.T) {
 	defer srv.Close()
 
 	db := newTestDB(t)
-	user := model.NewUser("u1", "u1@test.local", "pw123456", model.RoleUser, "成员")
+	user := model.NewUser("u1", "u1@test.local", "成员")
 	if err := db.Create(user).Error; err != nil {
 		t.Fatalf("建用户: %v", err)
 	}
@@ -196,8 +196,8 @@ func TestCheckRemindersDeliversOnceAcrossRuns(t *testing.T) {
 
 func TestCheckOverdueTasksRunsOncePerDayPerTask(t *testing.T) {
 	db := newTestDB(t)
-	user := model.NewUser("u1", "u1@test.local", "pw123456", model.RoleUser, "成员")
-	other := model.NewUser("u2", "u2@test.local", "pw123456", model.RoleUser, "同事")
+	user := model.NewUser("u1", "u1@test.local", "成员")
+	other := model.NewUser("u2", "u2@test.local", "同事")
 	if err := db.Create(&[]*model.User{user, other}).Error; err != nil {
 		t.Fatalf("建用户: %v", err)
 	}

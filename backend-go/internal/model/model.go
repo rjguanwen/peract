@@ -1,102 +1,64 @@
 package model
 
 import (
-	"errors"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
-// User 用户
+// User 用户。
+//
+// 这张表在接入 OneLink 之后**降级为本地用户档案**: 账号、口令、组织、角色授权都由平台
+// 接管, 这里留下的是一份映射(OnelinkUID)与业务上需要的展示字段。
+//
+// 为什么不把平台的用户主键直接当业务外键: 7 张业务表(Task/TaskProgress/Reminder/
+// TaskShare/Invitation...)的外键都指向 user.id。改成平台主键意味着改所有关联列、
+// 迁移存量数据、改所有 join —— 换来的只是"少一张表", 而业务语义完全没变。
+//
+// 纪律只有一条: **业务外键用 id(本地主键), 映射用 onelink_uid**。不要拿 username
+// 关联业务数据 —— 账号在平台侧是可以被改的, 改完之后历史数据会挂到"同名的新人"上。
 type User struct {
-	ID               uint    `gorm:"primaryKey" json:"id"`
-	Username         string  `gorm:"size:64;uniqueIndex" json:"username"`
-	Email            string  `gorm:"size:255;uniqueIndex" json:"email"`
-	FullName         string  `gorm:"size:128" json:"full_name"`
-	HashedPassword   string  `gorm:"size:255" json:"-"`
-	Role             string  `gorm:"size:16;default:user" json:"role"`
-	IsActive         bool    `gorm:"default:true" json:"is_active"`
-	AvatarURL        *string `gorm:"size:255" json:"avatar_url"` // 头像（/uploads/avatars/xxx.png）
-	Signature        string  `gorm:"size:255" json:"signature"`  // 个性签名
-	PasswordHint     string  `gorm:"size:128" json:"-"`          // 密码提示词
-	SecurityQuestion string  `gorm:"size:128" json:"-"`          // 找回安全问题
-	// SecurityAnswer 存答案的 bcrypt 哈希（写入前统一 TrimSpace + 小写）。
-	// 历史数据可能是明文，校验时经 IsLegacySecurityAnswer 识别并要求用户重设。
-	SecurityAnswer string `gorm:"size:255" json:"-"`
-	// PasswordChangedAt 是口令版本号：早于该时刻签发的令牌一律失效，
-	// 否则重置密码拦不住已经窃用到手的会话。NULL 表示改造前的存量账号，不做回溯。
-	PasswordChangedAt *time.Time `gorm:"column:password_changed_at" json:"-"`
-	CreatedAt         time.Time  `json:"created_at"`
+	ID uint `gorm:"primaryKey" json:"id"`
+	// OnelinkUID 平台用户主键。用指针是因为存量行在映射之前是 NULL,
+	// 而 NULL 与 0 在"这个人从哪来"这个问题上是两件事(0 不是任何人的主键)。
+	OnelinkUID *int64 `gorm:"uniqueIndex" json:"onelink_uid"`
+	Username   string `gorm:"size:64;uniqueIndex" json:"username"`
+	Email      string `gorm:"size:255;uniqueIndex" json:"email"`
+	FullName   string `gorm:"size:128" json:"full_name"`
+	// IsActive 是**业务开关**: "这个人还能不能被指派任务", 与平台的账号启用状态无关。
+	// 平台停用一个人会通过会话失效体现(单点登出 + 存活轮询), 那件事不该混进这一列。
+	IsActive  bool      `gorm:"default:true" json:"is_active"`
+	AvatarURL *string   `gorm:"size:255" json:"avatar_url"` // 头像（/uploads/avatars/xxx.png）
+	Signature string    `gorm:"size:255" json:"signature"`  // 个性签名
+	CreatedAt time.Time `json:"created_at"`
 }
 
-func NewUser(username, email, password, role, fullName string) *User {
-	hashed, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+// 注意: hashed_password / role / password_hint / security_question / security_answer /
+// password_changed_at 这几列**在库里还在**, 只是结构体不再映射它们。
+//
+// GORM 的 AutoMigrate 从不删列, 所以它们在存量库上会一直留着 —— 那正是我们要的:
+// 一次"顺手清理"会让旧数据不可逆地消失, 而它们留在那里不影响任何逻辑。
+// 确认不再需要回溯时, 手工 DROP 即可:
+//
+//	ALTER TABLE users DROP COLUMN hashed_password;  -- 以及其余五列
+//
+// 为什么要删字段而不是留着: 留着就等于留着一个"应用还能自己管口令"的入口,
+// 而那种入口一旦被人顺手用起来, 平台的账号体系就多了一个不受它管的分支。
+
+// NewUser 建一条**本地档案**。
+//
+// 参数里没有口令与角色, 而且这不是签名简化: 接入 OneLink 之后, 应用侧不再有任何一处
+// 需要构造口令哈希或角色字符串。留着那两个参数会诱使人再写出一个"应用自己管账号"的
+// 调用点, 而那种调用点一旦出现, 平台的账号体系就多了一个不受它管的分支。
+//
+// OnelinkUID 由调用方填(internal/onelink 的建档逻辑), 因为只有它手里有平台用户主键。
+func NewUser(username, email, fullName string) *User {
 	return &User{
-		Username:       username,
-		Email:          email,
-		FullName:       fullName,
-		HashedPassword: string(hashed),
-		Role:           role,
-		IsActive:       true,
+		Username: username,
+		Email:    email,
+		FullName: fullName,
+		IsActive: true,
 	}
-}
-
-func (u *User) CheckPassword(password string) bool {
-	return bcrypt.CompareHashAndPassword([]byte(u.HashedPassword), []byte(password)) == nil
-}
-
-// normalizeSecurityAnswer 统一答案书写差异（大小写、首尾空白、全角空格）。
-func normalizeSecurityAnswer(answer string) string {
-	return strings.ToLower(strings.TrimSpace(strings.ReplaceAll(answer, "\u3000", " ")))
-}
-
-// SetSecurityAnswer 哈希安全答案；空答案表示清除。
-func (u *User) SetSecurityAnswer(answer string) error {
-	normalized := normalizeSecurityAnswer(answer)
-	if normalized == "" {
-		u.SecurityAnswer = ""
-		return nil
-	}
-	hashed, err := bcrypt.GenerateFromPassword([]byte(normalized), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	u.SecurityAnswer = string(hashed)
-	return nil
-}
-
-// CheckSecurityAnswer 校验安全答案。哈希值来自数据库、答案由用户提供，
-// bcrypt 比对本身不泄露答案内容，故无需额外常数时间处理。
-func (u *User) CheckSecurityAnswer(answer string) bool {
-	normalized := normalizeSecurityAnswer(answer)
-	if normalized == "" || u.SecurityAnswer == "" {
-		return false
-	}
-	if u.IsLegacySecurityAnswer() {
-		// 旧明文数据不允许通过校验，避免明文被当作有效凭证使用
-		return false
-	}
-	return bcrypt.CompareHashAndPassword([]byte(u.SecurityAnswer), []byte(normalized)) == nil
-}
-
-// IsLegacySecurityAnswer 判断存量答案是否为改造前写入的明文（非 bcrypt 哈希）。
-func (u *User) IsLegacySecurityAnswer() bool {
-	return u.SecurityAnswer != "" && !strings.HasPrefix(u.SecurityAnswer, "$2")
-}
-
-// ErrSecurityAnswerLegacy 存量明文答案，需用户重新设置后才能继续找回密码。
-var ErrSecurityAnswerLegacy = errors.New("security answer stored in plaintext")
-
-func (u *User) SetPassword(password string) error {
-	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	u.HashedPassword = string(hashed)
-	return nil
 }
 
 // Task 任务
@@ -169,43 +131,23 @@ type SystemSetting struct {
 	Value string `gorm:"size:255" json:"value"`
 }
 
-// 系统设置键
-const (
-	SettingRegistrationEnabled = "registration_enabled" // "true"/"false"
-)
-
-// Invitation 邀请注册记录（管理员邀请指定邮箱注册）
-type Invitation struct {
-	ID        uint       `gorm:"primaryKey" json:"id"`
-	Email     string     `gorm:"size:255;uniqueIndex;not null" json:"email"`
-	Token     string     `gorm:"size:64;uniqueIndex;not null" json:"-"` // 随机邀请令牌（仅存库，不回传）
-	InvitedBy uint       `gorm:"not null" json:"invited_by"`            // 发起邀请的管理员 id
-	Status    string     `gorm:"size:16;default:pending" json:"status"` // pending / registered / revoked
-	ExpiresAt time.Time  `gorm:"not null" json:"expires_at"`
-	CreatedAt time.Time  `gorm:"not null" json:"created_at"`
-	UsedAt    *time.Time `json:"used_at"` // 实际完成注册的时间
-}
-
 // TaskShare 任务分享记录（创建者可将自己的任务分享给其他用户查看）
 type TaskShare struct {
-	ID         uint      `gorm:"primaryKey" json:"id"`
-	TaskID     uint      `gorm:"index;not null" json:"task_id"`
-	UserID     uint      `gorm:"index;not null" json:"user_id"` // 被分享者
-	GrantedBy  uint      `gorm:"not null" json:"granted_by"`     // 分享人（必须是任务创建者）
-	CreatedAt  time.Time `json:"created_at"`
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	TaskID    uint      `gorm:"index;not null" json:"task_id"`
+	UserID    uint      `gorm:"index;not null" json:"user_id"` // 被分享者
+	GrantedBy uint      `gorm:"not null" json:"granted_by"`    // 分享人（必须是任务创建者）
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // TaskShareUnique 同一任务同一用户不允许重复分享（联合唯一约束）
 func (TaskShare) TableName() string { return "task_shares" }
 
-// 邀请状态
-const (
-	InviteStatusPending    = "pending"    // 待接受
-	InviteStatusRegistered = "registered" // 已注册（链接已被使用）
-	InviteStatusRevoked    = "revoked"    // 已撤销
-)
-
 // 常量
+//
+// 这里**没有** RoleUser/RoleAdmin: 角色的载体是平台侧的角色授权
+// (sys_user_role.app_id 决定"他在哪个应用下持有哪个角色"), 应用侧拿到的只有权限码
+// 快照。用一个字符串字段表达角色, 就等于在应用侧再造一份会漂走的真值。
 const (
 	StatusTodo       = "todo"
 	StatusInProgress = "in_progress"
@@ -215,9 +157,6 @@ const (
 	PriorityMedium = "medium"
 	PriorityHigh   = "high"
 	PriorityUrgent = "urgent"
-
-	RoleUser  = "user"
-	RoleAdmin = "admin"
 
 	ActionCreated        = "created"
 	ActionAssigned       = "assigned"

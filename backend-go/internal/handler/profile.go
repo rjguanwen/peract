@@ -28,48 +28,43 @@ const (
 	avatarSniffSize = 512             // 魔数识别读取的文件头长度
 )
 
-// UpdateProfile PUT /profile 更新个人资料（昵称/姓名、个性签名）
+// UpdateProfile PUT /profile 更新个人资料。
+//
+// 只能改**个性签名**。姓名与头像不在这里, 而且这不是漏了 —— 它们由 OneLink 维护:
+// internal/onelink 的建档逻辑每次请求都会拿平台那份同步过来, 所以在这里改完,
+// 下一次请求就会被覆盖回去, 表现为"改了自己的名字, 过一会儿又变回来了"。
+//
+// 与其接住它再报错, 不如让它压根不是一个可提交的字段: 前端把姓名显示成只读并注明
+// "由 OneLink 维护", 比一条"这个字段不能改"的错误更早地把话说清楚。
 func (h *Handler) UpdateProfile(c *gin.Context) {
 	ctx := currentUser(c)
 	var req struct {
-		FullName  *string `json:"full_name"`
 		Signature *string `json:"signature"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		badRequest(c, "参数有误")
 		return
 	}
-	updates := map[string]any{}
-	if req.FullName != nil {
-		name := strings.TrimSpace(*req.FullName)
-		if len([]rune(name)) > maxFullNameLen {
-			badRequest(c, "昵称最多 128 字")
-			return
-		}
-		updates["full_name"] = name
-	}
-	if req.Signature != nil {
-		sig := strings.TrimSpace(*req.Signature)
-		if len([]rune(sig)) > 80 {
-			badRequest(c, "个性签名最多 80 字")
-			return
-		}
-		updates["signature"] = sig
-	}
-	if len(updates) == 0 {
+	if req.Signature == nil {
 		badRequest(c, "没有需要保存的内容")
 		return
 	}
-	var user model.User
-	if err := h.db.Model(&model.User{}).Where("id = ?", ctx.ID).Updates(updates).Error; err != nil {
+	sig := strings.TrimSpace(*req.Signature)
+	if len([]rune(sig)) > 80 {
+		badRequest(c, "个性签名最多 80 字")
+		return
+	}
+	if err := h.db.Model(&model.User{}).Where("id = ?", ctx.ID).
+		Update("signature", sig).Error; err != nil {
 		fail(c, http.StatusInternalServerError, "保存失败")
 		return
 	}
+	var user model.User
 	if err := h.db.First(&user, ctx.ID).Error; err != nil {
 		fail(c, http.StatusInternalServerError, "保存失败")
 		return
 	}
-	c.JSON(http.StatusOK, toUserOut(&user))
+	c.JSON(http.StatusOK, toUserOut(&user, ctx.p))
 }
 
 // UploadAvatar PUT /profile/avatar 上传当前用户头像（multipart: file）。头像存 uploads/avatars/，替换时删除旧文件。
@@ -145,7 +140,7 @@ func (h *Handler) UploadAvatar(c *gin.Context) {
 		fail(c, http.StatusInternalServerError, "保存失败")
 		return
 	}
-	c.JSON(http.StatusOK, toUserOut(&user))
+	c.JSON(http.StatusOK, toUserOut(&user, ctx.p))
 }
 
 // detectImageType 用文件头魔数判定图片类型，无法识别时返回空串。

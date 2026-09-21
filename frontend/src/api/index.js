@@ -4,6 +4,13 @@ import { ElMessage } from 'element-plus'
 const api = axios.create({
   baseURL: '/api/v1',
   timeout: 15000,
+  // 会话是一张 HttpOnly cookie(OneLink 的应用会话)。跨域部署时, 少了它浏览器不会带上
+  // 凭据, 而现象是"每个请求都 401", 看起来像会话过期 —— 于是人会去反复重新登录,
+  // 而重登一万次也不会好。
+  //
+  // 这里**没有**请求拦截器去拼 Authorization 头: 那段代码随自签 JWT 一起删掉了。
+  // 留着它(哪怕只是读一个空值)会让下一个人以为"这个应用还持有令牌"。
+  withCredentials: true,
 })
 
 // 会话失效时的回调由 main.js 注册。这里不直接 import store，
@@ -12,14 +19,6 @@ let unauthorizedHandler = null
 export function onUnauthorized(handler) {
   unauthorizedHandler = handler
 }
-
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
-  }
-  return config
-})
 
 // 同一段错误在两秒内只提示一次：一次页面加载往往并发好几个请求，
 // 令牌失效时会同时撞上 401，不合并就会叠出一屏重复弹窗。
@@ -78,31 +77,32 @@ api.interceptors.response.use(
 export default api
 
 // ===== 认证 =====
+//
+// 只剩三条, 而且都不是"登录": 登录发生在门户(用户从 OneLink 点卡片进来, 票据由后端在
+// /sso/landing 上消费), 应用侧没有登录页, 也没有注册与找回密码。
+//
+// me 是唯一一条"问我是谁"的接口: 200 说明会话有效, 401 说明该回门户了。
+//
+// logout 打的是 /logout 而不是 /api/v1/... —— 它由 OneLink 的守卫处理(要同时删掉本地
+// 会话行并清 cookie), 不在业务路由前缀下。响应是 302, axios 会跟着跳, 因此这里用
+// validateStatus 把 3xx 也当成成功, 否则每次登出都会多出一条"请求失败"的提示。
 export const authApi = {
-  login: (username, password) => {
-    const form = new URLSearchParams()
-    form.append('username', username)
-    form.append('password', password)
-    return api.post('/auth/login', form)
-  },
   me: (config) => api.get('/auth/me', config),
-  register: (data) => api.post('/auth/register', data),
-  // 退出时的 401 与报错都不该再打扰用户，本地清理照做即可
-  logout: () => api.post('/auth/logout', null, { silent: true }),
-  changePassword: (data) => api.put('/auth/password', data),
-  getSecurity: () => api.get('/auth/security'),
-  setSecurity: (data) => api.put('/auth/security', data),
-  getRecovery: (email) => api.get('/auth/forgot', { params: { email } }),
-  resetPassword: (data) => api.post('/auth/forgot/reset', data),
-  sendForgotEmail: (email) => api.post('/auth/forgot/send', { email }),
-  resetByToken: (data) => api.post('/auth/reset', data),
-  inviteInfo: (token) => api.get('/auth/invite/info', { params: { token } }),
+  logout: () =>
+    api.post('/logout', null, {
+      silent: true,
+      baseURL: '',
+      validateStatus: (s) => s >= 200 && s < 400,
+    }),
 }
 
 // ===== 用户 =====
+//
+// 没有 create, 也没有"改角色/改口令"。成员归属现在由平台的角色授权表达(在 OneLink 里
+// 给角色勾权限点、再把角色授给人), 而应用侧自动建账号或改口令都会造出一份与平台不一致
+// 的档案 —— 下一次这个人从门户进来, 平台那份会把它覆盖回去。
 export const userApi = {
   list: () => api.get('/users'),
-  create: (data) => api.post('/users', data),
   update: (id, data) => api.patch(`/users/${id}`, data),
 }
 
@@ -117,15 +117,6 @@ export const profileApi = {
       timeout: 30000,
     })
   },
-}
-
-// ===== 管理员（设置与邀请注册） =====
-export const adminApi = {
-  settings: () => api.get('/admin/settings'),
-  setRegistration: (enabled) => api.put('/admin/settings/registration', { enabled }),
-  invites: () => api.get('/admin/invites'),
-  createInvites: (emails) => api.post('/admin/invites', { emails }),
-  revokeInvite: (id) => api.post(`/admin/invites/${id}/revoke`),
 }
 
 // ===== 任务 =====

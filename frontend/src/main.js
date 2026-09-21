@@ -9,6 +9,7 @@ import App from './App.vue'
 import router from './router'
 import { onUnauthorized } from './api'
 import { useAuthStore } from './stores/auth'
+import { goToPortal } from './utils/portal'
 
 const app = createApp(App)
 
@@ -21,23 +22,19 @@ app.use(pinia)
 app.use(router)
 app.use(ElementPlus, { locale: zhCn })
 
-// 令牌失效（过期、被吊销、改密作废、账号被停用）时统一收敛到未登录态。
-// 只清 localStorage 是不够的：Pinia 里仍然认为已登录，界面会停在原页面反复报错。
+// 会话失效(平台登出、会话被清、单点登出轮询到)时统一收敛到"未登录"。
+//
+// 只清 store 是不够的: 页面会停在原处, 而上面每一个组件都会各自再报一次 401。
+// 也不能只清"本地 cookie"—— 那张 cookie 是 HttpOnly 的, 前端根本碰不到它,
+// 唯一的处置就是回门户重新进来。
+//
+// 判据用 401 而不是 403: 403 是"这个人没有这个权限", 把他送回门户只会让他重新登录一遍
+// 再撞同一个 403 —— 那会把一个"找管理员授权"的问题变成一次登录循环。
 onUnauthorized(() => {
   useAuthStore().clear()
-  // 等首屏导航落地再决定跳去哪，否则会拿初始占位路由覆盖掉用户真正想访问的地址；
-  // 而在路由守卫完成之前，未访问受保护页面时也无需强行跳转
-  router.isReady().then(() => {
-    const current = router.currentRoute.value
-    if (current.name !== 'login') {
-      router.replace({ name: 'login', query: { redirect: current.fullPath } })
-    }
-  })
+  goToPortal()
 })
 
-// 先用本地缓存渲染，再静默拉一次 /auth/me 校准角色与停用状态。
-// 失败后的收尾交给上面的 401 回调，这里不阻塞首屏挂载。
-const auth = useAuthStore()
-if (auth.isLoggedIn) auth.restore()
-
+// 首屏不在这里拉 /auth/me: 路由守卫会拉(而且它必须先拿到结果才能决定放不放行)。
+// 两处都拉会让每次刷新多一次往返, 而更麻烦的是它们可能一个成功一个失败。
 app.mount('#app')

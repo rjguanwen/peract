@@ -2,7 +2,6 @@ package database
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/glebarez/sqlite"
@@ -101,7 +100,6 @@ func Migrate(db *gorm.DB) error {
 		&model.TaskProgress{},
 		&model.Reminder{},
 		&model.SystemSetting{},
-		&model.Invitation{},
 		&model.TaskShare{},
 	); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
@@ -113,25 +111,11 @@ func Migrate(db *gorm.DB) error {
 	return nil
 }
 
-func InitAdmin(db *gorm.DB, cfg *config.Config) error {
-	var count int64
-	if err := db.Model(&model.User{}).Where("username = ?", cfg.AdminUsername).Count(&count).Error; err != nil {
-		return fmt.Errorf("query initial admin: %w", err)
-	}
-	if count > 0 {
-		return nil
-	}
-	admin := model.NewUser(cfg.AdminUsername, cfg.AdminEmail, cfg.AdminPassword, model.RoleAdmin, "系统管理员")
-	if err := db.Create(admin).Error; err != nil {
-		return fmt.Errorf("create initial admin: %w", err)
-	}
-	log.Printf("已创建默认管理员 %s", cfg.AdminUsername)
-	if cfg.AdminPassword == "admin123" {
-		if cfg.IsProduction() {
-			log.Println("[warn] 生产环境仍在使用默认管理员口令 admin123，请立即通过 INIT_ADMIN_PASSWORD 设置强口令")
-		} else {
-			log.Println("[warn] 默认管理员口令为 admin123，首次登录后请尽快修改")
-		}
-	}
-	return nil
-}
+// InitAdmin 没有了, 而且**不应该**再有一个替代品。
+//
+// 它的作用是"库里没有管理员就建一个, 并给一个默认口令" —— 接入 OneLink 之后这件事
+// 在平台上做: 建一个人、给他一个勾了躬行权限点的角色。应用侧再自动建一个管理员,
+// 等于在平台的账号体系之外留一个后门账号, 而它的口令是默认值、且没有任何一处会提醒
+// 有人去改它(原实现那句 warn 是唯一的提醒, 而它只出现在启动日志里)。
+//
+// 本地 user 表里现在只会有一种来源: 某个人从门户第一次进来时由 internal/onelink 建档。

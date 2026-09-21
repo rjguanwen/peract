@@ -16,21 +16,15 @@
         active-text-color="#ffffff"
         class="menu"
       >
-        <el-menu-item index="/">
-          <el-icon><Odometer /></el-icon>
-          <span>仪表盘</span>
-        </el-menu-item>
-        <el-menu-item index="/tasks">
-          <el-icon><Tickets /></el-icon>
-          <span>任务管理</span>
-        </el-menu-item>
-        <el-menu-item index="/tasks/deleted">
-          <el-icon><Delete /></el-icon>
-          <span>回收站</span>
-        </el-menu-item>
-        <el-menu-item v-if="auth.isAdmin" index="/users">
-          <el-icon><User /></el-icon>
-          <span>用户管理</span>
+        <!--
+          菜单由 utils/menu.js 配置 + 权限快照过滤而来, 不再逐条写死。
+          写死的那一版要改一处菜单就得改这个模板, 而"某一项该不该出现"的判断散在
+          每个 el-menu-item 上 —— 加了第四、第五个入口之后, 漏一个 v-if 的表现是
+          "没权限的人也看得见入口", 点进去才报 403。
+        -->
+        <el-menu-item v-for="m in menuItems" :key="m.path" :index="m.path">
+          <el-icon><component :is="m.icon" /></el-icon>
+          <span>{{ m.title }}</span>
         </el-menu-item>
       </el-menu>
     </el-aside>
@@ -44,7 +38,7 @@
             <span class="user-info">
               <UserAvatar :src="auth.user?.avatar_url" :name="auth.user?.full_name || auth.user?.username" :size="30" />
               {{ auth.user?.full_name || auth.user?.username }}
-              <el-tag v-if="auth.isAdmin" size="small" type="danger" effect="dark">管理员</el-tag>
+              <el-tag v-if="auth.canSeeAllTasks" size="small" type="info" effect="dark">可看全部任务</el-tag>
               <el-icon><ArrowDown /></el-icon>
             </span>
             <template #dropdown>
@@ -73,6 +67,8 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useAuthStore } from '../stores/auth'
+import { visibleMenus } from '../utils/menu'
+import { goToPortal, portalConfigured } from '../utils/portal'
 import ReminderBell from '../components/ReminderBell.vue'
 import UserAvatar from '../components/UserAvatar.vue'
 import LogoMark from '../components/LogoMark.vue'
@@ -80,6 +76,10 @@ import LogoMark from '../components/LogoMark.vue'
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+
+// 菜单的可见性跟着权限快照走。快照变了(重新登录)菜单就跟着变 —— 所以它必须是
+// computed 而不是在 setup 里算一次: 这个布局被 keep-alive 留着, 重登之后不重挂。
+const menuItems = computed(() => visibleMenus(auth.permissions, auth.isSuper))
 
 const activeMenu = computed(() => {
   if (route.path.startsWith('/tasks/deleted')) return '/tasks/deleted'
@@ -94,14 +94,20 @@ async function onCommand(cmd) {
     return
   }
   if (cmd === 'logout') {
+    const tip = portalConfigured()
+      ? '确定退出登录吗？退出后需要回到 OneLink 门户重新进入躬行。'
+      : '确定退出登录吗？'
     try {
-      await ElMessageBox.confirm('确定退出登录吗？', '提示', { type: 'warning' })
+      await ElMessageBox.confirm(tip, '提示', { type: 'warning' })
     } catch {
       // 取消时 ElMessageBox 是 reject，不接住就是一条未处理的 Promise 异常
       return
     }
     await auth.logout()
-    router.push('/login')
+    // 回门户, 而不是回一个本地登录页(那个页面已经删了)。
+    // 这里**不** router.push: 应用内已经没有任何"能让人重新进来"的页面了,
+    // 唯一的路是从门户点卡片 —— 而那一步会带一张新票据回来。
+    goToPortal()
   }
 }
 </script>

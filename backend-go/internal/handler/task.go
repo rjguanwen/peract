@@ -11,7 +11,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
-	"taskbackend/internal/middleware"
 	"taskbackend/internal/model"
 	"taskbackend/internal/service"
 )
@@ -163,30 +162,47 @@ func toProgressOut(p *model.TaskProgress) TaskProgressOut {
 	}
 }
 
-func (h *Handler) canModify(t *model.Task, user *middleware.UserContext) bool {
-	if user.Role == model.RoleAdmin {
+// 下面三个判定的第一个条件原来都是"角色是不是 admin"。接入 OneLink 之后角色在平台侧
+// (sys_user_role.app_id), 应用侧拿到的只有权限码快照 —— 而这三个位置要问的其实是
+// "这个人是不是**已经能看见全部任务**", 那正好是 PermTaskListAll 这个权限点的含义。
+//
+// 判据必须从会话里取(而不是从 model.User 上读一列): 本地档案里没有任何权限信息,
+// 而从平台实时查一次会让每一次编辑都多一次网络往返, 换来的是"权限撤销后立即生效" ——
+// 那件事由平台侧对每次带令牌的调用重判来保证, 这里不需要重复实现。
+
+// canModify 改任务状态/进展的权限: 能看全部的人, 或这个任务的创建者/被分配人。
+func (h *Handler) canModify(c *gin.Context, t *model.Task) bool {
+	ctx := currentUser(c)
+	if ctx == nil {
+		return false
+	}
+	if can(c, PermTaskListAll) {
 		return true
 	}
-	if t.CreatorID != nil && *t.CreatorID == user.ID {
+	if t.CreatorID != nil && *t.CreatorID == ctx.ID {
 		return true
 	}
-	if t.AssigneeID != nil && *t.AssigneeID == user.ID {
+	if t.AssigneeID != nil && *t.AssigneeID == ctx.ID {
 		return true
 	}
 	return false
 }
 
-// canDelete 删除权限：仅管理员或任务创建者
-func (h *Handler) canDelete(t *model.Task, user *middleware.UserContext) bool {
-	return h.canEdit(t, user)
+// canDelete 删除权限：能看全部的人, 或任务创建者
+func (h *Handler) canDelete(c *gin.Context, t *model.Task) bool {
+	return h.canEdit(c, t)
 }
 
-// canEdit 编辑权限：仅管理员或任务创建者
-func (h *Handler) canEdit(t *model.Task, user *middleware.UserContext) bool {
-	if user.Role == model.RoleAdmin {
+// canEdit 编辑权限：能看全部的人, 或任务创建者
+func (h *Handler) canEdit(c *gin.Context, t *model.Task) bool {
+	ctx := currentUser(c)
+	if ctx == nil {
+		return false
+	}
+	if can(c, PermTaskListAll) {
 		return true
 	}
-	return t.CreatorID != nil && *t.CreatorID == user.ID
+	return t.CreatorID != nil && *t.CreatorID == ctx.ID
 }
 
 // loadTask 按路径参数取任务，失败时已写好响应。
@@ -205,7 +221,7 @@ func (h *Handler) loadTask(c *gin.Context) (*model.Task, bool) {
 }
 
 // progressRecord 构造一条待写入的进展记录
-func progressRecord(t *model.Task, user *middleware.UserContext, action, comment string, oldStatus, newStatus *string, progress *int) model.TaskProgress {
+func progressRecord(t *model.Task, user *userCtx, action, comment string, oldStatus, newStatus *string, progress *int) model.TaskProgress {
 	return model.TaskProgress{
 		TaskID:    t.ID,
 		UserID:    &user.ID,
@@ -332,14 +348,18 @@ func statusNotices(t *model.Task, targetID uint, message string) ([]model.Remind
 }
 
 // ListTasks GET /tasks
-// visibility=mine（默认）：非管理员只能看到自己创建的/分配给自己的/被分享的任务
-// visibility=all（仅管理员）：可看所有任务
+// visibility=mine（默认）：只看得到自己创建的/分配给自己的/被分享的任务
+// visibility=all（需要 PermTaskListAll）：可看所有任务
 // ?mine=true 沿用兼容旧行为，等效于 visibility=mine
-// ?creator_id= 可进一步按创建者筛选（管理员用）
+// ?creator_id= 可进一步按创建者筛选（能看全部的人用）
 func (h *Handler) ListTasks(c *gin.Context) {
 	ctx := currentUser(c)
 
-	isAdmin := ctx.Role == model.RoleAdmin
+	// 判据从"角色是不是 admin"换成了权限点。名字也从 isAdmin 改成 canSeeAll:
+	// 它要回答的从来不是"这个人是不是管理员", 而是"他能不能看见全部任务" ——
+	// 前者在角色只有两个值的年代恰好等价, 而现在"躬行管理员"这个角色里可以只勾
+	// 一半权限点。
+	canSeeAll := can(c, PermTaskListAll)
 
 	// visibility：mine / all；mine=true 向后兼容映射到 mine
 	vis := c.Query("visibility")
@@ -349,8 +369,8 @@ func (h *Handler) ListTasks(c *gin.Context) {
 	if vis == "" {
 		vis = "mine"
 	}
-	if vis == "all" && !isAdmin {
-		forbidden(c, "仅管理员可查看全部任务")
+	if vis == "all" && !canSeeAll {
+		forbidden(c, "没有查看全部任务的权限")
 		return
 	}
 
@@ -379,8 +399,8 @@ func (h *Handler) ListTasks(c *gin.Context) {
 		q := h.db.Model(&model.Task{})
 
 		// --- 权限范围 ---
-		if !isAdmin {
-			// 非管理员：只看 creator_id=me OR assignee_id=me OR 被分享的任务
+		if !canSeeAll {
+			// 没有 PermTaskListAll：只看 creator_id=me OR assignee_id=me OR 被分享的任务
 			q = q.Where("(creator_id = ? OR assignee_id = ? OR id IN (SELECT task_id FROM task_shares WHERE user_id = ?))",
 				ctx.ID, ctx.ID, ctx.ID)
 		}
@@ -396,14 +416,14 @@ func (h *Handler) ListTasks(c *gin.Context) {
 				q = q.Where("assignee_id = ?", id)
 			}
 		}
-		// creator_id 筛选：管理员可按创建者查，非管理员只能查自己（已在权限范围约束）
+		// creator_id 筛选：能看全部的人可按创建者查，其余人只能查自己（已在权限范围约束）
 		if filters.creatorID != "" {
 			if id, err := strconv.Atoi(filters.creatorID); err == nil && id > 0 {
-				if isAdmin {
+				if canSeeAll {
 					q = q.Where("creator_id = ?", id)
 				} else if id == int(ctx.ID) {
 					q = q.Where("creator_id = ?", id)
-				} // 非管理员查其他创建者 → 静默忽略，维持自己的可见范围
+				} // 查其他创建者 → 静默忽略，维持自己的可见范围
 			}
 		}
 		if filters.keyword != "" {
@@ -424,7 +444,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 
 	var tasks []model.Task
 	if err := buildQuery().Preload("Assignee").Preload("Creator").
-		Order("created_at DESC").Offset((page-1)*pageSize).Limit(pageSize).Find(&tasks).Error; err != nil {
+		Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&tasks).Error; err != nil {
 		fail(c, http.StatusInternalServerError, "查询任务失败")
 		return
 	}
@@ -477,8 +497,8 @@ func (h *Handler) UpdateTask(c *gin.Context) {
 		return
 	}
 	ctx := currentUser(c)
-	if !h.canModify(task, ctx) {
-		forbidden(c, "只有创建者、负责人或管理员可以修改任务")
+	if !h.canModify(c, task) {
+		forbidden(c, "只有创建者、负责人或有全部任务权限的人可以修改任务")
 		return
 	}
 	var req taskUpdateReq
@@ -538,8 +558,8 @@ func (h *Handler) UpdateTask(c *gin.Context) {
 	// 状态与进度流转仍允许负责人操作。
 	editsBasic := req.Title != nil || req.Description != nil || req.Priority != nil ||
 		req.DueDate != nil || req.ClearDueDate || req.AssigneeID != nil || req.ClearAssignee
-	if editsBasic && !h.canEdit(task, ctx) {
-		forbidden(c, "只有任务创建者或管理员可以编辑任务信息")
+	if editsBasic && !h.canEdit(c, task) {
+		forbidden(c, "只有任务创建者或有全部任务权限的人可以编辑任务信息")
 		return
 	}
 
@@ -667,9 +687,8 @@ func (h *Handler) DeleteTask(c *gin.Context) {
 	if !ok {
 		return
 	}
-	ctx := currentUser(c)
-	if !h.canDelete(task, ctx) {
-		forbidden(c, "只有任务创建者或管理员可以删除任务")
+	if !h.canDelete(c, task) {
+		forbidden(c, "只有任务创建者或有全部任务权限的人可以删除任务")
 		return
 	}
 	// GORM 软删除：仅写入 deleted_at，不物理删除
@@ -695,7 +714,8 @@ func (h *Handler) ListDeletedTasks(c *gin.Context) {
 		// Unscoped() 只是关闭 GORM 的软删除过滤，必须再显式要求 deleted_at 非空，
 		// 否则回收站会把未删除的任务一并列出。
 		q := h.db.Unscoped().Model(&model.Task{}).Where("deleted_at IS NOT NULL")
-		if ctx.Role != model.RoleAdmin {
+		// 回收站里能看多少, 判据与列表一致: "能不能看全部任务"。
+		if !can(c, PermTaskListAll) {
 			q = q.Where("creator_id = ?", ctx.ID)
 		}
 		if priority != "" {
@@ -735,7 +755,6 @@ func (h *Handler) RestoreTask(c *gin.Context) {
 		badRequest(c, "任务 ID 不合法")
 		return
 	}
-	ctx := currentUser(c)
 	var task model.Task
 	if err := h.db.Unscoped().First(&task, id).Error; err != nil {
 		notFound(c, "任务不存在")
@@ -745,8 +764,8 @@ func (h *Handler) RestoreTask(c *gin.Context) {
 		badRequest(c, "任务未删除，无需恢复")
 		return
 	}
-	if !h.canDelete(&task, ctx) {
-		forbidden(c, "只有任务创建者或管理员可以恢复任务")
+	if !h.canDelete(c, &task) {
+		forbidden(c, "只有任务创建者或有全部任务权限的人可以恢复任务")
 		return
 	}
 	// 单条 UPDATE 即可完成恢复：UpdateColumn 绕开软删除写保护，也不再需要二次 Save 全量字段
@@ -766,9 +785,8 @@ func (h *Handler) AddProgress(c *gin.Context) {
 	if !ok {
 		return
 	}
-	ctx := currentUser(c)
-	if !h.canModify(task, ctx) {
-		forbidden(c, "只有创建者、负责人或管理员可以添加进展")
+	if !h.canModify(c, task) {
+		forbidden(c, "只有创建者、负责人或有全部任务权限的人可以添加进展")
 		return
 	}
 	var req progressCreateReq
@@ -781,6 +799,7 @@ func (h *Handler) AddProgress(c *gin.Context) {
 		return
 	}
 
+	ctx := currentUser(c)
 	var record model.TaskProgress
 	switch {
 	case req.Status != nil && *req.Status != "":

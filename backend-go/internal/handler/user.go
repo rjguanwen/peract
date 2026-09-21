@@ -3,30 +3,19 @@ package handler
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"taskbackend/internal/model"
 )
 
-type userCreateReq struct {
-	Username string `json:"username" binding:"required"`
-	Email    string `json:"email" binding:"required,email"`
-	FullName string `json:"full_name"`
-	Password string `json:"password" binding:"required,min=6"`
-	Role     string `json:"role"`
-}
-
-type userUpdateReq struct {
-	FullName *string `json:"full_name"`
-	Email    *string `json:"email" binding:"omitempty,email"`
-	Role     *string `json:"role"`
-	Password *string `json:"password"`
-	IsActive *bool   `json:"is_active"`
-}
-
 // ListUsers GET /users
+//
+// 返回裸数组是本接口已有的前端契约（任务表单的负责人下拉直接当数组用），保持不变。
+//
+// 每一行的 permissions/super_admin 都是空的, 而且是**故意**空的: 那是"当前会话"的快照,
+// 挂在别人身上没有意义。要看某个人能做什么, 看的是平台侧的角色授权 —— 那个界面在
+// OneLink 上。在应用侧再渲染一遍等于给同一个真值造第二份展示, 而两份展示迟早会不一致。
 func (h *Handler) ListUsers(c *gin.Context) {
 	var users []model.User
 	if err := h.db.Order("id").Find(&users).Error; err != nil {
@@ -35,74 +24,19 @@ func (h *Handler) ListUsers(c *gin.Context) {
 	}
 	out := make([]UserOut, 0, len(users))
 	for i := range users {
-		out = append(out, toUserOut(&users[i]))
+		out = append(out, toUserOut(&users[i], nil))
 	}
-	// 返回裸数组是本接口已有的前端契约（UserManage/TaskFormDialog 直接当数组用），保持不变
 	c.JSON(http.StatusOK, out)
 }
 
-// CreateUser POST /users (admin)
-func (h *Handler) CreateUser(c *gin.Context) {
-	var req userCreateReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		badRequest(c, "参数不合法："+err.Error())
-		return
-	}
-	req.Username = strings.TrimSpace(req.Username)
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	req.FullName = strings.TrimSpace(req.FullName)
-	if len(req.Username) > maxUsernameLen || len(req.Email) > maxEmailLen || len(req.FullName) > maxFullNameLen {
-		badRequest(c, "用户名、邮箱或姓名过长")
-		return
-	}
-	if !usernameRe.MatchString(req.Username) {
-		badRequest(c, "用户名只能包含字母、数字、下划线、点、横线")
-		return
-	}
-	if !emailRe.MatchString(req.Email) {
-		badRequest(c, "邮箱格式不正确")
-		return
-	}
-	if len(req.Password) < 6 {
-		badRequest(c, "密码至少需要 6 个字符")
-		return
-	}
-	role := strings.ToLower(req.Role)
-	if role != "" && role != model.RoleUser && role != model.RoleAdmin {
-		badRequest(c, "角色不合法")
-		return
-	}
-	if role == "" {
-		role = model.RoleUser
-	}
-	usernameTaken, err := h.exists(&model.User{}, "username = ?", req.Username)
-	if err != nil {
-		failInternal(c, "创建用户查重", err, "创建用户失败")
-		return
-	}
-	if usernameTaken {
-		badRequest(c, "用户名已存在")
-		return
-	}
-	emailTaken, err := h.exists(&model.User{}, "email = ?", req.Email)
-	if err != nil {
-		failInternal(c, "创建用户查重", err, "创建用户失败")
-		return
-	}
-	if emailTaken {
-		badRequest(c, "邮箱已被注册")
-		return
-	}
-	user := model.NewUser(req.Username, req.Email, req.Password, role, req.FullName)
-	if err := h.db.Create(user).Error; err != nil {
-		fail(c, http.StatusInternalServerError, "创建用户失败")
-		return
-	}
-	c.JSON(http.StatusCreated, toUserOut(user))
-}
-
-// UpdateUser PATCH /users/:id (admin)
-// 保护规则：不能修改管理员账号的角色或启用状态；不能修改自己的角色或启用状态。
+// UpdateUser PATCH /users/:id
+//
+// 只改**本地档案**里应用自己说了算的那几列: 姓名与个性签名之外的业务开关(能不能被指派)。
+//
+// 账号、邮箱、口令、角色都不在这里 —— 它们在平台上, 而应用侧改它们只会造出一份与平台
+// 不一致的档案: 下一次这个人从门户进来, 平台那份会把它覆盖回去, 表现为"管理员改了他的
+// 账号, 过一会儿又变回来了"。把不可改的字段从请求结构里去掉, 比接住它再报错更省事,
+// 也更不容易在将来被人"顺手打开"。
 func (h *Handler) UpdateUser(c *gin.Context) {
 	ctx := currentUser(c)
 	id, err := parseIDParam(c)
@@ -110,7 +44,11 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		badRequest(c, "用户 ID 不合法")
 		return
 	}
-	var req userUpdateReq
+	var req struct {
+		FullName  *string `json:"full_name"`
+		Signature *string `json:"signature"`
+		IsActive  *bool   `json:"is_active"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		badRequest(c, "参数不合法："+err.Error())
 		return
@@ -121,72 +59,44 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	// 是否在改动「角色/启用状态」这类权限敏感字段
-	changingPrivilege := false
-	if req.Role != nil && strings.ToLower(*req.Role) != user.Role {
-		changingPrivilege = true
-	}
-	if req.IsActive != nil && *req.IsActive != user.IsActive {
-		changingPrivilege = true
-	}
-	if changingPrivilege {
-		if user.Role == model.RoleAdmin {
-			forbidden(c, "不能修改管理员账号的角色或启用状态")
-			return
-		}
-		if user.ID == ctx.ID {
-			forbidden(c, "不能修改自己的角色或启用状态")
-			return
-		}
+	// 不能停用自己。这不是"谨慎", 而是自锁: 本地这一列一关, 这个人会在所有需要指派
+	// 的地方消失, 而他手里唯一能改回来的入口正是这里。
+	if req.IsActive != nil && !*req.IsActive && user.ID == ctx.ID {
+		forbidden(c, "不能停用自己")
+		return
 	}
 
+	updates := map[string]any{}
 	if req.FullName != nil {
-		user.FullName = strings.TrimSpace(*req.FullName)
+		name := strings.TrimSpace(*req.FullName)
+		if len([]rune(name)) > maxFullNameLen {
+			badRequest(c, "姓名最多 128 字")
+			return
+		}
+		updates["full_name"] = name
 	}
-	if req.Email != nil {
-		email := strings.ToLower(strings.TrimSpace(*req.Email))
-		if !emailRe.MatchString(email) {
-			badRequest(c, "邮箱格式不正确")
+	if req.Signature != nil {
+		sig := strings.TrimSpace(*req.Signature)
+		if len([]rune(sig)) > 80 {
+			badRequest(c, "个性签名最多 80 字")
 			return
 		}
-		dup, err := h.exists(&model.User{}, "email = ? AND id != ?", email, user.ID)
-		if err != nil {
-			failInternal(c, "更新用户查重", err, "更新用户失败")
-			return
-		}
-		if dup {
-			badRequest(c, "邮箱已被注册")
-			return
-		}
-		user.Email = email
-	}
-	if req.Role != nil {
-		role := strings.ToLower(*req.Role)
-		if role != model.RoleUser && role != model.RoleAdmin {
-			badRequest(c, "角色不合法")
-			return
-		}
-		user.Role = role
-	}
-	if req.Password != nil && *req.Password != "" {
-		if len(*req.Password) < 6 {
-			badRequest(c, "密码至少需要 6 个字符")
-			return
-		}
-		if err := user.SetPassword(*req.Password); err != nil {
-			fail(c, http.StatusInternalServerError, "设置密码失败")
-			return
-		}
-		// 管理员重置口令同样作废旧会话，否则被监守的会话不会因重置而断开
-		changedAt := time.Now().UTC().Truncate(time.Second)
-		user.PasswordChangedAt = &changedAt
+		updates["signature"] = sig
 	}
 	if req.IsActive != nil {
-		user.IsActive = *req.IsActive
+		updates["is_active"] = *req.IsActive
 	}
-	if err := h.db.Save(&user).Error; err != nil {
+	if len(updates) == 0 {
+		badRequest(c, "没有需要保存的内容")
+		return
+	}
+	if err := h.db.Model(&model.User{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
 		fail(c, http.StatusInternalServerError, "更新用户失败")
 		return
 	}
-	c.JSON(http.StatusOK, toUserOut(&user))
+	if err := h.db.First(&user, user.ID).Error; err != nil {
+		fail(c, http.StatusInternalServerError, "更新用户失败")
+		return
+	}
+	c.JSON(http.StatusOK, toUserOut(&user, nil))
 }

@@ -2,7 +2,9 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -11,31 +13,42 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
+
+	onelinksdk "github.com/onelink/platform/sdk/go/onelink"
 
 	"taskbackend/internal/config"
 	"taskbackend/internal/database"
-	"taskbackend/internal/middleware"
 	"taskbackend/internal/model"
+	"taskbackend/internal/onelink"
 	"taskbackend/internal/service"
 )
 
 // 本文件是 handler 层的回归测试脚手架：用真实 SQLite 文件 + 真实路由注册，
 // 通过 HTTP 驱动断言，而不是直接调用 handler 函数——那样会绕开中间件与
 // 状态码语义，而这一轮改动恰恰大量落在这两层。
+//
+// 身份部分在接入 OneLink 之后换了做法, 换法与理由见 sessionFor 的注释:
+// 会话不再由 /auth/login 签发, 而是直接写进 SDK 的 Store。
 
 type testEnv struct {
-	t      *testing.T
-	cfg    *config.Config
-	db     *gorm.DB
-	auth   *middleware.Auth
-	h      *Handler
-	router *gin.Engine
+	t        *testing.T
+	cfg      *config.Config
+	db       *gorm.DB
+	guard    *onelinksdk.Guard
+	store    *onelink.Store
+	profiles *onelink.Profiles
+	h        *Handler
+	router   *gin.Engine
+
+	// perms 记着"平台上给这个人勾了哪些权限点"。它模拟的是平台侧的角色授权 ——
+	// 应用侧已经没有任何角色概念, 所以这份映射只活在测试夹具里, 不落库。
+	perms map[uint][]string
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -43,29 +56,28 @@ func newTestEnv(t *testing.T) *testEnv {
 	return newTestEnvWith(t, nil)
 }
 
-// newTestEnvWith 允许单个用例在启动前收紧配置（限流阈值、体大小上限、SMTP 开关等）。
-// 必须在 handler.New 之前改：限流器在构造时就按配额建好了。
+// newTestEnvWith 允许单个用例在启动前收紧配置（体大小上限、SMTP 开关等）。
+// 必须在 handler.New 之前改。
 func newTestEnvWith(t *testing.T, mutate func(*config.Config)) *testEnv {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		ProjectName:  "躬行测试",
-		Env:          "development",
-		SecretKey:    "unit-test-secret-key-0123456789-abcdefghij-klmn",
-		DatabaseURL:  "sqlite:///" + filepath.ToSlash(filepath.Join(dir, "test.db")),
-		UploadDir:    filepath.Join(dir, "uploads"),
-		AppBaseURL:   "http://test.local",
-		MaxBodyBytes: 1 << 20,
-		// 令牌有效期留空，走 AccessTokenExpireMinutes() 的默认回落
-		// 限流配额默认给足，专门测限流的用例再单独收紧，避免互相干扰
-		LoginFailLimit:  50,
-		LoginFailWindow: time.Minute,
-		NotifyLimit:     200,
-		NotifyWindow:    time.Minute,
-		NotifyWorkers:   1,
-		NotifyQueueSize: 256,
+		ProjectName: "躬行测试",
+		Env:         "development",
+		DatabaseURL: "sqlite:///" + filepath.ToSlash(filepath.Join(dir, "test.db")),
+		UploadDir:   filepath.Join(dir, "uploads"),
+		AppBaseURL:  "http://test.local",
+		// 接入配置给全: 缺了它 RegisterRoutes 会整族跳过(见 handler.go), 那样所有用例
+		// 都会得到 404, 而 404 看起来像"路由写错了", 归因方向完全被带偏。
+		OnelinkAppCode:   "task-system",
+		OnelinkBaseURL:   "http://onelink.test",
+		OnelinkPortalURL: "http://portal.test",
+		OnelinkAppSecret: "unit-test-app-secret",
+		MaxBodyBytes:     1 << 20,
+		NotifyWorkers:    1,
+		NotifyQueueSize:  256,
 	}
 	if mutate != nil {
 		mutate(cfg)
@@ -83,10 +95,40 @@ func newTestEnvWith(t *testing.T, mutate func(*config.Config)) *testEnv {
 		t.Cleanup(func() { _ = sqlDB.Close() })
 	}
 
-	auth := middleware.NewAuth(cfg, db)
+	client, err := onelinksdk.New(onelinksdk.Config{
+		BaseURL:   cfg.OnelinkBaseURL,
+		AppCode:   cfg.OnelinkAppCode,
+		AppSecret: cfg.OnelinkAppSecret,
+	})
+	if err != nil {
+		t.Fatalf("构造 OneLink 客户端: %v", err)
+	}
+	store := onelink.NewStore(db)
+	if err := store.Migrate(); err != nil {
+		t.Fatalf("建会话表: %v", err)
+	}
+	guard, err := onelinksdk.NewGuard(onelinksdk.GuardConfig{
+		Client:    client,
+		PortalURL: cfg.OnelinkPortalURL,
+		Store:     store,
+		// 离线验签与存活轮询都关掉, 理由见 sessionFor 的注释: 它们要的是**平台的密钥**
+		// 与**平台的存活接口**, 而那两样是 SDK 自己的用例覆盖的东西。关掉之后守卫走的
+		// 路径(读 Store → 判到期 → 建 Principal)与生产完全一致。
+		AliveInterval: -1,
+		OnUnauthenticated: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"detail":"登录已失效"}`))
+		}),
+	})
+	if err != nil {
+		t.Fatalf("构造 OneLink 守卫: %v", err)
+	}
+
 	// 通知投递器只建不 Start：入队不阻塞，测试也不该去连外部服务
 	notifier := service.NewNotifier(cfg)
-	h := New(db, cfg, auth, notifier)
+	profiles := onelink.NewProfiles(db)
+	h := New(db, cfg, guard, profiles, notifier)
 
 	engine := gin.New()
 	engine.Use(gin.Recovery())
@@ -96,12 +138,12 @@ func newTestEnvWith(t *testing.T, mutate func(*config.Config)) *testEnv {
 	}
 	h.RegisterRoutes(engine)
 
-	t.Cleanup(func() {
-		h.Close()
-		auth.Stop()
-	})
+	t.Cleanup(func() { h.Close() })
 
-	return &testEnv{t: t, cfg: cfg, db: db, auth: auth, h: h, router: engine}
+	return &testEnv{
+		t: t, cfg: cfg, db: db, guard: guard, store: store, profiles: profiles,
+		h: h, router: engine, perms: map[uint][]string{},
+	}
 }
 
 // call 一次 HTTP 调用的结果。
@@ -211,12 +253,35 @@ func (e *testEnv) request(method, path string, body io.Reader, contentType, toke
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	// 会话走 cookie 而不是 Authorization 头。这是接入 OneLink 之后唯一的变化:
+	// 凭据从"前端自己拿着的一段串"变成了"浏览器自动带上的一张 HttpOnly cookie",
+	// 而后者 JS 读不到 —— 这正是把令牌从 localStorage 里拿出来的目的。
+	//
+	// 参数名仍然叫 token, 因为对调用方而言它就是一个不透明的会话句柄: 换掉参数名会让
+	// 每一个用例都改一遍, 而那些改动不携带任何新信息。
 	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.AddCookie(&http.Cookie{Name: onelinksdk.DefaultCookieName, Value: token})
 	}
+	return e.do(req)
+}
+
+// do 直接发一个手工构造的请求。
+//
+// 给"身份能不能被伪造"那一类用例用: 它们要发的请求不满足 request 的形状(比如只有
+// Authorization 头、或者一个自定义的身份头), 而那正是被断言的对象。
+func (e *testEnv) do(req *http.Request) call {
+	e.t.Helper()
 	w := httptest.NewRecorder()
 	e.router.ServeHTTP(w, req)
 	return call{Status: w.Code, Header: w.Header(), Body: w.Body.Bytes()}
+}
+
+// newHeaderRequest 造一个只带某个自定义头的请求。
+func newHeaderRequest(e *testEnv, method, path, header, value string) *http.Request {
+	e.t.Helper()
+	req := httptest.NewRequest(method, path, strings.NewReader(""))
+	req.Header.Set(header, value)
+	return req
 }
 
 func (e *testEnv) get(path, token string) call {
@@ -244,7 +309,6 @@ func (e *testEnv) del(path, token string) call {
 	return e.request(http.MethodDelete, path, nil, "", token)
 }
 
-// postForm 用于登录接口（OAuth2 password form）。
 func (e *testEnv) postForm(path string, form url.Values, token string) call {
 	e.t.Helper()
 	return e.request(http.MethodPost, path, strings.NewReader(form.Encode()),
@@ -287,42 +351,130 @@ func jsonBody(t *testing.T, payload any) io.Reader {
 	return bytes.NewReader(raw)
 }
 
+// ---- 权限档位 ----
+//
+// 它们模拟的是"平台上给这个人的角色勾了哪些权限点"。接入前这里对应的是 model.RoleUser /
+// model.RoleAdmin 两个字符串, 而现在应用侧连角色字段都没有了 —— 判据全是权限点。
+var (
+	// permsAdmin 相当于接入前的 admin: 全部权限点。
+	//
+	// 同时含 M 型(菜单)与 B 型(接口)两组码, 与平台上的实际授权一致 —— 平台的角色授权
+	// 是"在树上勾选", 勾一个人不会只勾到一半。后端只读 B 型那组, 但夹具照实给全,
+	// 免得将来有人把某个 B 码换成 M 码时, 用例仍然绿。
+	permsAdmin = []string{
+		PermMenuDashboard, PermMenuTask, PermMenuTrash, PermMenuUser,
+		PermDashboardView, PermTaskList, PermTaskListAll, PermTaskCreate, PermTaskUpdate,
+		PermTaskDelete, PermTaskRestore, PermTaskShare, PermReminderMgr,
+		PermUserView, PermUserManage,
+	}
+	// permsMember 相当于接入前的 user: 能干活, 但只看得到与自己相关的任务。
+	//
+	// 里面**有** PermTaskDelete 与 PermTaskRestore, 与接入前一致: 那时普通成员也能删
+	// 自己建的任务、也能在自己的回收站里恢复。少了它们会把一批"本来就该通过"的用例
+	// 变成 403, 而那种失败看起来像权限判错了。
+	//
+	// 里面**有** PermUserView: 指派任务要选人, 而人员列表就是那个下拉的数据源。
+	permsMember = []string{
+		PermMenuDashboard, PermMenuTask, PermMenuTrash, PermMenuUser,
+		PermDashboardView, PermTaskList, PermTaskCreate, PermTaskUpdate,
+		PermTaskDelete, PermTaskRestore, PermTaskShare, PermReminderMgr,
+		PermUserView,
+	}
+)
+
 // ---- 数据准备 ----
 
-func (e *testEnv) addUser(username, email, password, role string) *model.User {
+func (e *testEnv) addUser(username, email string) *model.User {
 	e.t.Helper()
-	u := model.NewUser(username, email, password, role, username+"姓名")
+	u := model.NewUser(username, email, username+"姓名")
+	// OnelinkUID 必须有值: 它是"这个本地档案对应平台上的谁"的唯一映射, 也是守卫在每次
+	// 请求上认人的依据。留空会让这个用户永远登不进来, 而现象是"登录态无故失效"。
+	uid := e.nextOnelinkUID()
+	u.OnelinkUID = &uid
 	if err := e.db.Create(u).Error; err != nil {
 		e.t.Fatalf("创建用户 %s: %v", username, err)
 	}
 	return u
 }
 
+// addAdmin 建一个持全部权限点的用户。
 func (e *testEnv) addAdmin(username string) *model.User {
 	e.t.Helper()
-	return e.addUser(username, username+"@test.local", "pass1234", model.RoleAdmin)
+	return e.addUserWithPerms(username, permsAdmin...)
 }
 
+// addMember 建一个持成员权限档位的用户。
 func (e *testEnv) addMember(username string) *model.User {
 	e.t.Helper()
-	return e.addUser(username, username+"@test.local", "pass1234", model.RoleUser)
+	return e.addUserWithPerms(username, permsMember...)
 }
 
-// login 走真实登录接口拿令牌，顺带覆盖表单解析与令牌签发链路。
-func (e *testEnv) login(username, password string) string {
+// addUserWithPerms 建一个用户并记下"平台上给他勾了哪些权限点"。
+func (e *testEnv) addUserWithPerms(username string, perms ...string) *model.User {
 	e.t.Helper()
-	res := e.postForm("/api/v1/auth/login", url.Values{
-		"username": {username},
-		"password": {password},
-	}, "").Require(e.t, http.StatusOK)
-	var out struct {
-		AccessToken string `json:"access_token"`
+	u := e.addUser(username, username+"@test.local")
+	e.perms[u.ID] = append([]string(nil), perms...)
+	return u
+}
+
+var onelinkUIDSeq atomic.Int64
+
+// nextOnelinkUID 造一个不会撞的平台用户主键。
+//
+// 从 1000 起是为了与本地 id 拉开: 两者相等时, 一个"拿 onelink_uid 当本地 id 用"的
+// 错误实现会**恰好**通过 —— 而那个错误会让所有业务外键指向另一张表里的行。
+func (e *testEnv) nextOnelinkUID() int64 { return 1000 + onelinkUIDSeq.Add(1) }
+
+// login 为某个用户造一条应用会话, 返回它的句柄(cookie 值)。
+//
+// 参数保留 (username, password) 的形状, 而 password **被忽略** —— 这是有意的:
+// 口令现在只存在于平台上, 应用侧连校验它的能力都没有(库里没有哈希)。
+// 留着这个参数是因为"给谁发一条会话"这件事本身没变, 改签名会让每一个用例都动一遍。
+//
+// 会话怎么来的: 原来是走 /api/v1/auth/login 拿自签 JWT; 现在是直接写进 SDK 的 Store。
+// 走真实兑换(签票据 → 换令牌)需要一个假平台, 而那会把 SDK 的协议细节(RS256、JWKS、
+// 票据一次性)搬进业务测试 —— 那些细节已经由 SDK 自己的用例覆盖。这里跳过的是
+// "会话最初怎么来的", 守卫之后走的路径(读 Store → 判到期 → 建 Principal → 挂权限)
+// 与生产完全一致。
+func (e *testEnv) login(username, _ string) string {
+	e.t.Helper()
+	var u model.User
+	if err := e.db.Where("username = ?", username).First(&u).Error; err != nil {
+		e.t.Fatalf("登录前先建用户 %s: %v", username, err)
 	}
-	res.Into(e.t, &out)
-	if out.AccessToken == "" {
-		e.t.Fatalf("登录未返回令牌：%s", out.AccessToken)
+	return e.sessionFor(&u, e.perms[u.ID]...)
+}
+
+// sessionFor 为指定用户造会话, 权限点由调用方显式给出。
+func (e *testEnv) sessionFor(u *model.User, perms ...string) string {
+	e.t.Helper()
+	if u.OnelinkUID == nil {
+		e.t.Fatalf("用户 %s 没有 onelink_uid, 无法建会话", u.Username)
 	}
-	return out.AccessToken
+	localID := fmt.Sprintf("testsession-%d-%d", u.ID, onelinkUIDSeq.Add(1))
+	now := time.Now()
+	st := &onelinksdk.SessionState{
+		LocalID: localID,
+		Identity: onelinksdk.Identity{
+			SessionID:   fmt.Sprintf("platform-sid-%d", u.ID),
+			UserID:      *u.OnelinkUID,
+			Username:    u.Username,
+			RealName:    u.FullName,
+			Permissions: append([]string(nil), perms...),
+		},
+		AccessToken:  "test-access-token",
+		RefreshToken: "test-refresh-token",
+		// 访问令牌必须留足寿命: 守卫在距到期不足 RenewWindow(默认 2 分钟)时会去平台续期,
+		// 而这里没有平台 —— 那会变成一次连接失败, 表现为"所有用例随机 401"。
+		AccessExpiresAt:  now.Add(time.Hour),
+		RefreshExpiresAt: now.Add(24 * time.Hour),
+		CreatedAt:        now,
+		LastAliveCheck:   now,
+	}
+	if err := e.store.Put(context.Background(), st); err != nil {
+		e.t.Fatalf("写入测试会话: %v", err)
+	}
+	return localID
 }
 
 func (e *testEnv) adminToken() string { return e.login("root", "pass1234") }
@@ -367,22 +519,6 @@ func (e *testEnv) fetchTask(token string, id uint) taskJSON {
 }
 
 func u2s(v uint) string { return strconv.FormatUint(uint64(v), 10) }
-
-// signToken 手工签一个指定 iat 的令牌，用于验证「口令版本号作废旧会话」。
-// 不能靠 sleep 一个真实秒差来造旧令牌，那会把测试变成计时器。
-func (e *testEnv) signToken(userID uint, iat time.Time) string {
-	e.t.Helper()
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": userID,
-		"iat": iat.Unix(),
-		"iss": e.cfg.ProjectName,
-		"exp": time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(e.cfg.SecretKey))
-	if err != nil {
-		e.t.Fatalf("签发测试令牌: %v", err)
-	}
-	return token
-}
 
 // urlValues 以成对参数构造表单，省去测试里反复写 url.Values{…} 的噪声。
 func urlValues(kv ...string) url.Values {

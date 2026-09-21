@@ -15,15 +15,15 @@ import (
 // 看板每次刷新都要跑一遍这里。原实现是 8 条独立 COUNT，SQLite 单写锁下
 // 这些查询会串行排队；改为 3 条条件聚合（CASE WHEN）后往返次数降到三分之一，
 // 且同一批数据在一次扫描内得出，避免了并发写入时各计数彼此不一致。
-// 权限范围：非管理员只看 creator_id=me OR assignee_id=me OR 被分享的任务。
+// 权限范围：没有 PermTaskListAll 的人只看 creator_id=me OR assignee_id=me OR 被分享的任务。
 func (h *Handler) Overview(c *gin.Context) {
 	ctx := currentUser(c)
-	isAdmin := ctx.Role == model.RoleAdmin
+	canSeeAll := can(c, PermTaskListAll)
 	now := time.Now()
 
 	// 权限范围子查询（用于 WHERE 子句注入）
 	visScope := func(q *gorm.DB) *gorm.DB {
-		if isAdmin {
+		if canSeeAll {
 			return q
 		}
 		return q.Where(

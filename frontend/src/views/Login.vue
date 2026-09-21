@@ -1,154 +1,16 @@
+<!--
+  这个页面整块删掉了: 登录发生在 OneLink 门户。
+
+  用户从门户点"躬行"卡片 → 门户带一次性票据把人送到后端的 /sso/landing → 后端用票据
+  换出应用会话并种一张 HttpOnly cookie → 前端这才开始跑。整个过程里应用侧没有一处
+  需要用户输账号口令, 因此也不该有一个登录表单 —— 留着它的唯一效果是让人以为口令
+  还存在这个应用里。
+
+  会话失效时的处置在 utils/portal.js 的 goToPortal(): 回门户重新点卡片。
+
+  留成空文件而不是直接删除, 是因为删文件这一步需要有人确认版本库里没有别处引用;
+  确认无误后可以直接删掉这个文件。
+-->
 <template>
-  <div class="login-page">
-    <el-card class="login-card">
-      <div class="login-title">
-        <LogoMark :size="52" />
-        <div class="brand-block">
-          <h2>躬行</h2>
-          <div class="slogan">纸上千言，不如躬行一件。</div>
-          <div class="brand-en">PERACT</div>
-        </div>
-      </div>
-      <el-form ref="formRef" :model="form" :rules="rules" size="large" @keyup.enter="onSubmit">
-        <el-form-item prop="username">
-          <el-input v-model="form.username" placeholder="用户名" :prefix-icon="User" />
-        </el-form-item>
-        <el-form-item prop="password">
-          <el-input
-            v-model="form.password"
-            type="password"
-            placeholder="密码"
-            show-password
-            :prefix-icon="Lock"
-          />
-        </el-form-item>
-        <el-button type="primary" class="login-btn" :loading="loading" @click="onSubmit">
-          登 录
-        </el-button>
-        <div class="login-actions">
-          <router-link to="/forgot-password" class="link">忘记密码？</router-link>
-          <span class="divider">|</span>
-          <router-link to="/register" class="link">注册账号</router-link>
-        </div>
-        <div class="login-tip">默认管理员：admin / admin123</div>
-      </el-form>
-    </el-card>
-  </div>
+  <div />
 </template>
-
-<script setup>
-import { reactive, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { User, Lock } from '@element-plus/icons-vue'
-import { useAuthStore } from '../stores/auth'
-import LogoMark from '../components/LogoMark.vue'
-
-const route = useRoute()
-const router = useRouter()
-const auth = useAuthStore()
-const formRef = ref()
-const loading = ref(false)
-
-const form = reactive({ username: '', password: '' })
-const rules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
-}
-
-async function onSubmit() {
-  try {
-    await formRef.value.validate()
-  } catch {
-    return
-  }
-  loading.value = true
-  try {
-    await auth.login(form.username, form.password)
-    ElMessage.success('登录成功')
-    router.push(safeRedirect(route.query.redirect))
-  } catch {
-    /* 拦截器已提示（含 429 限流倒计时） */
-  } finally {
-    loading.value = false
-  }
-}
-
-// 只接受站内绝对路径；//evil.com 这种以双斜杠开头的会被当成协议相对地址解析
-function safeRedirect(target) {
-  if (typeof target !== 'string') return '/'
-  if (!target.startsWith('/') || target.startsWith('//') || target.startsWith('/\\')) return '/'
-  return target
-}
-</script>
-
-<style scoped>
-.login-page {
-  height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #1d2939 0%, #344e41 100%);
-}
-.login-card {
-  width: 380px;
-  padding: 8px 16px 24px;
-}
-.login-title {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin-bottom: 20px;
-}
-.brand-block {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin-top: 10px;
-}
-.brand-block h2 {
-  margin: 0;
-  font-size: 22px;
-  letter-spacing: 6px;
-}
-.slogan {
-  margin-top: 6px;
-  color: #6b7280;
-  font-size: 12px;
-  letter-spacing: 0.5px;
-}
-.brand-en {
-  margin-top: 2px;
-  color: #9ca3af;
-  font-size: 10px;
-  letter-spacing: 4px;
-}
-.login-btn {
-  width: 100%;
-}
-.login-actions {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 10px;
-  margin-top: 14px;
-}
-.link {
-  color: #409eff;
-  font-size: 13px;
-  text-decoration: none;
-}
-.link:hover {
-  color: #66b1ff;
-}
-.divider {
-  color: #d1d5db;
-  font-size: 12px;
-}
-.login-tip {
-  margin-top: 16px;
-  text-align: center;
-  color: #9ca3af;
-  font-size: 13px;
-}
-</style>

@@ -263,25 +263,28 @@ watch(showProgressDialog, (visible) => {
 const canModify = computed(() => {
   if (!task.value) return false
   return (
-    auth.isAdmin ||
+    auth.canSeeAllTasks ||
     task.value.creator_id === auth.user?.id ||
     task.value.assignee_id === auth.user?.id
   )
 })
 
-// 删除权限：仅管理员或任务创建者
+// 删除权限：仅"能看全部任务"的人或任务创建者
+//
+// 判据从"角色是不是 admin"换成了权限点。名字也从"管理员"改掉: 它要回答的是
+// "他能不能看全部任务", 而"躬行管理员"这个角色里可以只勾一半权限点。
 const canDelete = computed(() => {
   if (!task.value) return false
-  return auth.isAdmin || task.value.creator_id === auth.user?.id
+  return auth.canSeeAllTasks || task.value.creator_id === auth.user?.id
 })
 
-// 编辑权限：仅管理员或任务创建者
+// 编辑权限：仅"能看全部任务"的人或任务创建者
 const canEdit = computed(() => {
   if (!task.value) return false
-  return auth.isAdmin || task.value.creator_id === auth.user?.id
+  return auth.canSeeAllTasks || task.value.creator_id === auth.user?.id
 })
 
-// 分享权限：仅任务创建者（管理员不能替别人分享）
+// 分享权限：仅任务创建者（能看全部任务的人也不能替别人分享）
 const canShare = computed(() => {
   if (!task.value) return false
   return task.value.creator_id === auth.user?.id

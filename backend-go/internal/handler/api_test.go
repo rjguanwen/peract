@@ -2,17 +2,22 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"taskbackend/internal/model"
 )
 
-// 本文件盯住这一轮修复中「前后端契约」相关的行为：
-// 未读数包装、批量已读、PATCH 清空标志、回收站语义、令牌吊销。
+// 本文件盯住「前后端契约」相关的行为：
+// 未读数包装、批量已读、PATCH 清空标志、回收站语义、会话失效。
 // 这些点出错时接口仍然是 200，只有断言能挡住。
 
-func TestLoginIssuesUsableToken(t *testing.T) {
+// 会话能认人、能带出权限快照, 且不泄露任何本地敏感列。
+//
+// 接入 OneLink 之后这里不再断言 role: 角色的载体是平台侧的角色授权, 应用侧给的是一份
+// 权限码快照 —— 而快照的内容正是前端用来决定摆哪些入口的依据, 所以它必须真的在。
+func TestSessionResolvesIdentityAndPermissions(t *testing.T) {
 	e := newTestEnv(t)
 	e.addAdmin("root")
 
@@ -20,79 +25,122 @@ func TestLoginIssuesUsableToken(t *testing.T) {
 
 	me := e.get("/api/v1/auth/me", token).Require(t, http.StatusOK).Map(t)
 	if got := Str(t, me, "username"); got != "root" {
-		t.Fatalf("登录后的身份不对，got %q", got)
+		t.Fatalf("会话对应的身份不对，got %q", got)
 	}
-	if got := Str(t, me, "role"); got != model.RoleAdmin {
-		t.Fatalf("角色不对，got %q", got)
+	perms, ok := me["permissions"].([]any)
+	if !ok || len(perms) == 0 {
+		t.Fatalf("权限快照缺失或为空：%v", me["permissions"])
 	}
-	// 响应绝不能带出口令哈希或安全答案
-	for _, leak := range []string{"hashed_password", "security_answer", "password"} {
+	// 快照里必须有那个决定数据范围的码: 少了它, 前端不会摆"全部任务"这个入口,
+	// 而服务端仍然允许 —— 界面与权限两边对不上时, 用户会以为自己没权限。
+	found := false
+	for _, one := range perms {
+		if one == PermTaskListAll {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("权限快照里没有 %s：%v", PermTaskListAll, perms)
+	}
+	// 响应绝不能带出本地档案里那几列认证遗留字段
+	for _, leak := range []string{"hashed_password", "security_answer", "password", "role"} {
 		if _, ok := me[leak]; ok {
-			t.Fatalf("用户响应泄露了敏感字段 %q：%v", leak, me)
+			t.Fatalf("用户响应泄露了 %q：%v", leak, me)
 		}
 	}
 }
 
-func TestLoginRejectsBadCredentialsAndInactiveAccount(t *testing.T) {
+// 会话不存在、伪造、或已过期时一律 401 —— 而不是 500 或"匿名放行"。
+//
+// 这三种在接入前由 JWT 的签名与 exp 保证, 现在由守卫查 Store 保证。判据变了,
+// 但**失败必须是同一个 401** 这件事没变: 前端只认 401 才会把人送回门户。
+func TestGuardRejectsUnknownAndExpiredSessions(t *testing.T) {
 	e := newTestEnv(t)
-	e.addAdmin("root")
-	blocked := e.addMember("blocked")
-	if err := e.db.Model(&model.User{}).Where("id = ?", blocked.ID).
-		Update("is_active", false).Error; err != nil {
-		t.Fatalf("停用账号: %v", err)
-	}
+	root := e.addAdmin("root")
 
-	// 用户不存在与密码错误必须是同一句话，否则登录接口就是账号枚举器
-	unknown := e.postForm("/api/v1/auth/login", urlValues("username", "ghost", "password", "whatever"), "").
-		Require(t, http.StatusBadRequest).Detail(t)
-	wrong := e.postForm("/api/v1/auth/login", urlValues("username", "root", "password", "nope"), "").
-		Require(t, http.StatusBadRequest).Detail(t)
-	if unknown != wrong {
-		t.Fatalf("账号不存在与口令错误的提示不一致，可被用于枚举： %q vs %q", unknown, wrong)
-	}
+	// 伪造的 cookie 值: 形状合法(NonceOK 允许的字符集与长度), 但 Store 里没有
+	e.get("/api/v1/auth/me", "forged-session-value").Require(t, http.StatusUnauthorized)
 
-	e.postForm("/api/v1/auth/login", urlValues("username", "blocked", "password", "pass1234"), "").
-		Require(t, http.StatusForbidden)
+	// 过期会话: 直接把访问令牌的到期时刻推到过去。守卫的 admit 会把它判成死会话,
+	// 而不是去平台续期(这里没有平台)。
+	token := e.login("root", "pass1234")
+	if err := e.db.Model(&struct{}{}).Table("onelink_sessions").
+		Where("local_id = ?", token).
+		Update("access_expires", time.Now().Add(-time.Hour)).Error; err != nil {
+		t.Fatalf("把会话改成过期: %v", err)
+	}
+	e.get("/api/v1/auth/me", token).Require(t, http.StatusUnauthorized)
+
+	// 干净的一条会话仍然可用 —— 否则上面两条"拒绝"可能只是因为整条链路坏了
+	e.get("/api/v1/auth/me", e.sessionFor(root, permsAdmin...)).Require(t, http.StatusOK)
 }
 
-func TestLogoutRevokesAccessToken(t *testing.T) {
+// 登出必须真的把会话从库里删掉。会话是有状态的, 所以"删了"与"没删"是可观测的 ——
+// 而它正是接入 OneLink 相对自签 JWT 最实质的收益: 登出不再需要一张黑名单去补。
+func TestLogoutDeletesSession(t *testing.T) {
 	e := newTestEnv(t)
 	e.addAdmin("root")
 
 	token := e.login("root", "pass1234")
 	e.get("/api/v1/auth/me", token).Require(t, http.StatusOK)
 
-	e.post("/api/v1/auth/logout", nil, token).Require(t, http.StatusOK)
-
-	// JWT 无状态，不拉黑的话登出等于没登出
-	if got := e.get("/api/v1/auth/me", token).Require(t, http.StatusUnauthorized); got.Detail(t) == "" {
-		t.Fatal("登出后旧令牌仍可用")
+	// 登出回 302 而不是 200: 它是给浏览器点的, 成功后要回到站内首页(SDK 的 Logout)。
+	// 断言状态码而不是"只看副作用", 是因为 302 与 401 在这里长得不一样 —— 后者说明
+	// 这条路由被挪到了守卫之后, 而那样一来未登录的人连登出都做不到。
+	bye := e.post("/logout", nil, token).Require(t, http.StatusFound)
+	// cookie 必须被清掉: 留着一条指向已删会话的 cookie, 表现是"登出后刷新页面又像登录了"
+	// (请求带上死 cookie, 守卫回 401, 前端跳门户 —— 用户看到的是被弹了两次)。
+	if sc := bye.Header.Get("Set-Cookie"); !strings.Contains(sc, "Max-Age=0") && !strings.Contains(sc, "Max-Age=-1") {
+		t.Fatalf("登出未清除会话 cookie：%q", sc)
 	}
 
-	// 登出后立刻重登必须拿到可用的新会话：
-	// 没有 jti 时，同一秒内重登会拿回与刚被拉黑那条逐字节相同的令牌
+	if got := e.get("/api/v1/auth/me", token).Require(t, http.StatusUnauthorized); got.Detail(t) == "" {
+		t.Fatal("登出后旧会话仍可用")
+	}
+	// 库里那一行必须没了, 而不是只被标了某个"已登出"位 —— 前者不会留下令牌原文
+	var n int64
+	if err := e.db.Table("onelink_sessions").Where("local_id = ?", token).Count(&n).Error; err != nil {
+		t.Fatalf("统计会话行: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("登出后会话行仍在库里(%d 行)", n)
+	}
+
+	// 登出后重登拿到的是另一条会话, 且能用
 	again := e.login("root", "pass1234")
 	if again == token {
-		t.Fatal("重登返回的令牌与已吊销令牌完全相同，新会话会被黑名单误拦")
+		t.Fatal("重登拿到了与已删除会话相同的句柄")
 	}
 	e.get("/api/v1/auth/me", again).Require(t, http.StatusOK)
 }
 
-func TestAnonymousAndMemberAccessControl(t *testing.T) {
+// 功能权限按权限点判, 不按"有没有登录"判。
+//
+// 接入前这里靠一个 role 字符串; 现在每个入口在路由上各自挂一个码, 于是"能看人员列表"
+// 与"能改别人档案"是两件不同的事 —— 而前者成员需要(指派任务要选人), 后者不需要。
+func TestMemberPermissionBoundaries(t *testing.T) {
 	e := newTestEnv(t)
 	e.addAdmin("root")
 	member := e.addMember("member")
 	memberToken := e.login("member", "pass1234")
 
 	e.get("/api/v1/tasks", "").Require(t, http.StatusUnauthorized)
-	// 注册用户不得因为请求里塞了 role 就提权
-	if member.Role != model.RoleUser {
-		t.Fatalf("成员角色被改成了 %q", member.Role)
-	}
-	e.post("/api/v1/users", map[string]any{"username": "sneaky", "email": "s@test.local", "password": "pass1234"}, memberToken).
-		Require(t, http.StatusForbidden)
-	e.get("/api/v1/admin/settings", memberToken).Require(t, http.StatusForbidden)
+
+	// 成员能看人员列表(任务表单的负责人下拉靠它)
 	e.get("/api/v1/users", memberToken).Require(t, http.StatusOK)
+	// 但不能改别人的档案
+	e.patch("/api/v1/users/"+u2s(member.ID), map[string]any{"full_name": "自己改的"}, memberToken).
+		Require(t, http.StatusForbidden)
+	// 也不能要求"看全部任务"
+	e.get("/api/v1/tasks?visibility=all", memberToken).Require(t, http.StatusForbidden)
+
+	// 权限点是从会话快照里取的, 所以换一条"没有这个码"的会话就该被拒 ——
+	// 这一条同时证明判据真的落在权限点上, 而不是某个写死的默认值。
+	e.perms[member.ID] = []string{PermTaskList}
+	narrow := e.sessionFor(member, PermTaskList)
+	e.get("/api/v1/tasks", narrow).Require(t, http.StatusOK)
+	e.post("/api/v1/tasks", map[string]any{"title": "不该建得出来"}, narrow).
+		Require(t, http.StatusForbidden)
 }
 
 func TestTaskClearFlagsActuallyNullColumns(t *testing.T) {

@@ -1,0 +1,140 @@
+[
+  {
+    "key": "task-system:dashboard",
+    "name": "仪表盘",
+    "type": "M",
+    "path": "/",
+    "component": "Dashboard",
+    "icon": "Odometer",
+    "sort": 1
+  },
+  {
+    "key": "task-system:dashboard:view",
+    "name": "查看仪表盘",
+    "type": "B",
+    "parent": "task-system:dashboard",
+    "method": "GET",
+    "uri": "/api/v1/stats/overview",
+    "sort": 1
+  },
+
+  {
+    "key": "task-system:task",
+    "name": "任务管理",
+    "type": "M",
+    "path": "/tasks",
+    "component": "TaskList",
+    "icon": "Tickets",
+    "sort": 2
+  },
+  {
+    "key": "task-system:task:list",
+    "name": "查看任务",
+    "type": "B",
+    "parent": "task-system:task",
+    "method": "GET",
+    "uri": "/api/v1/tasks",
+    "sort": 1
+  },
+  {
+    "key": "task-system:task:list-all",
+    "name": "查看全部任务",
+    "type": "B",
+    "parent": "task-system:task",
+    "method": "GET",
+    "uri": "/api/v1/tasks?visibility=all",
+    "sort": 2
+  },
+  {
+    "key": "task-system:task:create",
+    "name": "创建任务",
+    "type": "B",
+    "parent": "task-system:task",
+    "method": "POST",
+    "uri": "/api/v1/tasks",
+    "sort": 3
+  },
+  {
+    "key": "task-system:task:update",
+    "name": "编辑任务",
+    "type": "B",
+    "parent": "task-system:task",
+    "method": "PATCH",
+    "uri": "/api/v1/tasks/:id",
+    "sort": 4
+  },
+  {
+    "key": "task-system:task:delete",
+    "name": "删除任务",
+    "type": "B",
+    "parent": "task-system:task",
+    "method": "DELETE",
+    "uri": "/api/v1/tasks/:id",
+    "sort": 5
+  },
+  {
+    "key": "task-system:task:share",
+    "name": "分享任务",
+    "type": "B",
+    "parent": "task-system:task",
+    "method": "POST",
+    "uri": "/api/v1/tasks/:id/shares",
+    "sort": 6
+  },
+  {
+    "key": "task-system:reminder:manage",
+    "name": "管理提醒",
+    "type": "B",
+    "parent": "task-system:task",
+    "method": "POST",
+    "uri": "/api/v1/reminders",
+    "sort": 7
+  },
+
+  {
+    "key": "task-system:task-trash",
+    "name": "回收站",
+    "type": "M",
+    "path": "/tasks/deleted",
+    "component": "TaskTrash",
+    "icon": "Delete",
+    "sort": 3
+  },
+  {
+    "key": "task-system:task:restore",
+    "name": "查看与恢复已删任务",
+    "type": "B",
+    "parent": "task-system:task-trash",
+    "method": "POST",
+    "uri": "/api/v1/tasks/:id/restore",
+    "sort": 1
+  },
+
+  {
+    "key": "task-system:user",
+    "name": "用户档案",
+    "type": "M",
+    "path": "/users",
+    "component": "UserManage",
+    "icon": "User",
+    "sort": 4
+  },
+  {
+    "key": "task-system:user:view",
+    "name": "查看用户档案",
+    "type": "B",
+    "parent": "task-system:user",
+    "method": "GET",
+    "uri": "/api/v1/users",
+    "sort": 1
+  },
+  {
+    "key": "task-system:user:manage",
+    "name": "编辑用户档案",
+    "type": "B",
+    "parent": "task-system:user",
+    "method": "PATCH",
+    "uri": "/api/v1/users/:id",
+    "sort": 2
+  }
+]

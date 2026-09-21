@@ -16,6 +16,13 @@ import (
 // 配合 ESCAPE 转义，避免用户输入的 % 和 _ 被当作通配符放大结果集。
 const rawLikeClause = "title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\'"
 
+// 展示字段的长度上限。
+//
+// 这里只剩姓名一个: 用户名与邮箱的上限随自建注册一起消失了 —— 那两个值现在由平台给,
+// 平台侧本来就有自己的上限。而"上游校验过"不能当成本地不做防御的依据: 多出来的字符
+// 会进库、进列表、进通知, 而截断比一条超长的通知好收拾。
+const maxFullNameLen = 128
+
 // taskFilters 任务列表的筛选条件集合。
 type taskFilters struct {
 	status      string
@@ -25,7 +32,7 @@ type taskFilters struct {
 	keyword     string
 	overdueOnly bool
 	mine        bool
-	visibility  string // "mine"(默认)/"all"，非管理员只能看自己的任务
+	visibility  string // "mine"(默认)/"all"；没有 PermTaskListAll 的人只能看自己的任务
 }
 
 // parseIDParam 解析路径中的 :id，非正整数一律报错。
@@ -92,13 +99,16 @@ func failInternal(c *gin.Context, where string, err error, msg string) {
 	fail(c, http.StatusInternalServerError, msg)
 }
 
-// canViewTask 判断用户是否对任务有查看权限：admin / 创建者 / 被分配人 / 被分享者。
+// canViewTask 判断用户是否对任务有查看权限：能看全部的人 / 创建者 / 被分配人 / 被分享者。
+//
+// 第一个条件从"角色是不是 admin"换成了权限点 PermTaskListAll: 角色在平台侧, 应用侧
+// 拿到的只有权限码快照, 而这个条件要问的正是"他是不是已经能看见全部任务"。
 func (h *Handler) canViewTask(c *gin.Context, taskID uint) bool {
 	ctx := currentUser(c)
 	if ctx == nil {
 		return false
 	}
-	if ctx.Role == model.RoleAdmin {
+	if can(c, PermTaskListAll) {
 		return true
 	}
 	var task model.Task

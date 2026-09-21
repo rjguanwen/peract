@@ -128,7 +128,6 @@ func (h *Handler) UnreadCount(c *gin.Context) {
 
 // CreateReminder POST /reminders
 func (h *Handler) CreateReminder(c *gin.Context) {
-	ctx := currentUser(c)
 	var req reminderCreateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		badRequest(c, "参数不合法："+err.Error())
@@ -140,7 +139,7 @@ func (h *Handler) CreateReminder(c *gin.Context) {
 		return
 	}
 	// 仅创建者/负责人/管理员可设置提醒
-	if !h.canModify(&task, ctx) {
+	if !h.canModify(c, &task) {
 		forbidden(c, "无权限为该任务设置提醒")
 		return
 	}
@@ -190,7 +189,7 @@ func (h *Handler) MarkRead(c *gin.Context) {
 		notFound(c, "提醒不存在")
 		return
 	}
-	if (reminder.UserID == nil || *reminder.UserID != ctx.ID) && ctx.Role != model.RoleAdmin {
+	if (reminder.UserID == nil || *reminder.UserID != ctx.ID) && !can(c, PermTaskListAll) {
 		forbidden(c, "无权限操作该提醒")
 		return
 	}

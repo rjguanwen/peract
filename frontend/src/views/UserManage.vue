@@ -1,102 +1,20 @@
 <template>
   <div class="user-mgmt">
-    <!-- 注册开关 -->
-    <el-card shadow="never">
-      <div class="switch-row">
-        <div>
-          <div class="card-title">允许新用户注册</div>
-          <p class="card-desc">关闭后注册入口将提示「系统已暂停注册」，现有用户不受影响</p>
-        </div>
-        <el-switch v-model="registrationEnabled" :loading="savingSetting" @change="toggleRegistration" />
-      </div>
-    </el-card>
-
-    <!-- 邀请注册 -->
-    <el-card shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div>
-            <span class="card-title">邀请注册</span>
-            <span class="card-desc-inline">向指定邮箱发送邀请链接，关闭公开注册后受邀邮箱仍可注册</span>
-          </div>
-          <el-button size="small" text type="primary" @click="loadInvites">
-            <el-icon class="mr-1"><Refresh /></el-icon>刷新
-          </el-button>
-        </div>
+    <el-alert type="info" show-icon :closable="false">
+      <template #title>这里是「用户档案」，不是账号管理</template>
+      <template #default>
+        账号、口令、以及"谁能做什么"的角色授权都在 OneLink 上。这一页只保留业务上要用的
+        那部分：谁能被指派任务，以及他在这个应用里显示成什么名字。
+        新增人员请到 OneLink 建账号并授权，他从门户进来时会自动出现在这里。
       </template>
+    </el-alert>
 
-      <div class="invite-input-row">
-        <el-input
-          v-model="inviteEmails"
-          type="textarea"
-          :rows="3"
-          placeholder="输入受邀邮箱，每行一个或以逗号分隔（单次最多 20 个）"
-        />
-        <el-button type="primary" class="invite-send" :loading="sendingInvite" :disabled="!inviteEmails.trim()" @click="sendInvites">
-          发送邀请
-        </el-button>
-      </div>
-
-      <div v-if="inviteResults.length" class="invite-results">
-        <div v-for="(r, i) in inviteResults" :key="i" class="invite-result-item">
-          <span :class="r.ok ? 'ok' : 'err'">{{ r.ok ? '✓' : '✗' }}</span>
-          <div class="min-w-0">
-            <div class="result-email">{{ r.email }}</div>
-            <div class="result-reason">
-              {{ r.reason || (r.dev ? '开发模式：SMTP 未配置，以下为邀请链接（点击可打开注册页）' : '邀请邮件已发送') }}
-            </div>
-            <a
-              v-if="r.ok && r.invite_url"
-              :href="r.invite_url"
-              target="_blank"
-              rel="noopener"
-              class="invite-url"
-            >{{ r.invite_url }}</a>
-          </div>
-        </div>
-      </div>
-
-      <div class="invite-list" v-if="invites.length || loadingInvites" v-loading="loadingInvites">
-        <el-table :data="invites" stripe size="small">
-          <el-table-column label="受邀邮箱" min-width="190">
-            <template #default="{ row }">{{ row.email }}</template>
-          </el-table-column>
-          <el-table-column label="状态" width="90">
-            <template #default="{ row }">
-              <el-tag v-if="row.status === 'pending' && !row.expired" size="small" type="warning" effect="plain">待接受</el-tag>
-              <el-tag v-else-if="row.status === 'pending' && row.expired" size="small" type="info" effect="plain">已过期</el-tag>
-              <el-tag v-else-if="row.status === 'registered'" size="small" type="success" effect="plain">已注册</el-tag>
-              <el-tag v-else size="small" type="danger" effect="plain">已撤销</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="邀请人" width="120">
-            <template #default="{ row }">{{ row.invitedBy?.display_name || '—' }}</template>
-          </el-table-column>
-          <el-table-column label="邀请时间" width="120">
-            <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
-          </el-table-column>
-          <el-table-column label="有效至" width="120">
-            <template #default="{ row }">{{ formatDate(row.expiresAt) }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="90" fixed="right">
-            <template #default="{ row }">
-              <el-button v-if="row.status === 'pending' && !row.expired" size="small" type="danger" plain @click="revokeInvite(row)">撤销</el-button>
-              <el-button v-else-if="row.status === 'pending' && row.expired" size="small" type="primary" text @click="resendInvite(row)">重发</el-button>
-              <span v-else class="dim">—</span>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-      <el-empty v-else-if="!loadingInvites" description="暂无邀请记录" :image-size="70" />
-    </el-card>
-
-    <!-- 用户列表 -->
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
-          <span class="card-title">用户列表（{{ users.length }}）</span>
-          <el-button type="primary" size="small" @click="openCreate">
-            <el-icon class="mr-1"><Plus /></el-icon>新增用户
+          <span class="card-title">用户档案（{{ users.length }}）</span>
+          <el-button size="small" text type="primary" @click="load">
+            <el-icon class="mr-1"><Refresh /></el-icon>刷新
           </el-button>
         </div>
       </template>
@@ -114,31 +32,30 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="用户名" width="120">
+        <el-table-column label="用户名" width="140">
           <template #default="{ row }">{{ row.username }}</template>
         </el-table-column>
-        <el-table-column label="角色" width="100">
-          <template #default="{ row }">
-            <el-tag v-if="row.role === 'admin'" size="small" type="danger" effect="dark">管理员</el-tag>
-            <el-tag v-else size="small" type="info" effect="plain">普通用户</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="可否被指派" width="110">
           <template #default="{ row }">
             <el-tag v-if="row.is_active" size="small" type="success">正常</el-tag>
             <el-tag v-else size="small" type="danger">已停用</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="注册时间" width="140">
+        <el-table-column label="加入时间" width="140">
           <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="170" fixed="right">
+        <el-table-column v-if="canManage" label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <template v-if="row.id === auth.user?.id">
               <span class="dim">（本人）</span>
             </template>
             <div v-else class="op-btns">
-              <el-button v-if="row.role !== 'admin'" size="small" :type="row.is_active ? 'danger' : 'success'" plain @click="toggleActive(row)">
+              <el-button
+                size="small"
+                :type="row.is_active ? 'danger' : 'success'"
+                plain
+                @click="toggleActive(row)"
+              >
                 {{ row.is_active ? '停用' : '启用' }}
               </el-button>
               <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
@@ -148,35 +65,25 @@
       </el-table>
     </el-card>
 
-    <!-- 新增/编辑用户 -->
-    <el-dialog v-model="dialogVisible" :title="editing ? '编辑用户' : '新增用户'" width="480px">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
-        <el-form-item label="用户名" prop="username">
-          <el-input v-model="form.username" :disabled="!!editing" placeholder="登录名，2-64字符" />
+    <!-- 编辑档案 -->
+    <el-dialog v-model="dialogVisible" title="编辑用户档案" width="460px">
+      <el-form label-position="top">
+        <el-form-item label="用户名">
+          <el-input :model-value="editing?.username" disabled />
         </el-form-item>
-        <el-form-item label="姓名">
-          <el-input v-model="form.full_name" placeholder="真实姓名" />
+        <el-form-item label="邮箱">
+          <el-input :model-value="editing?.email" disabled />
         </el-form-item>
-        <el-form-item label="邮箱" prop="email">
-          <el-input v-model="form.email" placeholder="user@example.com" />
+        <el-form-item label="姓名 / 昵称">
+          <el-input v-model="form.full_name" placeholder="全站显示的名称" />
         </el-form-item>
-        <el-form-item label="密码" prop="password">
-          <el-input
-            v-model="form.password"
-            type="password"
-            show-password
-            :placeholder="editing ? '留空则不修改' : '至少6位'"
-          />
+        <el-form-item label="个性签名">
+          <el-input v-model="form.signature" maxlength="80" show-word-limit />
         </el-form-item>
-        <el-form-item v-if="canChangePrivilege" label="角色">
-          <el-radio-group v-model="form.role">
-            <el-radio value="user">普通用户</el-radio>
-            <el-radio value="admin">管理员</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="editing && canChangePrivilege" label="状态">
-          <el-switch v-model="form.is_active" active-text="启用" inactive-text="停用" />
-        </el-form-item>
+        <p class="dialog-hint">
+          用户名、邮箱与角色由 OneLink 维护，改这里没有意义 —— 下一次这个人从门户进来时
+          会被平台那份覆盖回去。
+        </p>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -189,7 +96,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { userApi, adminApi } from '../api'
+import { userApi } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { formatDateTime } from '../utils/constants'
 import UserAvatar from '../components/UserAvatar.vue'
@@ -200,53 +107,13 @@ const loading = ref(false)
 const saving = ref(false)
 const dialogVisible = ref(false)
 const editing = ref(null)
-const formRef = ref()
 
-// 注册开关
-const registrationEnabled = ref(true)
-const savingSetting = ref(false)
-// 邀请
-const inviteEmails = ref('')
-const sendingInvite = ref(false)
-const inviteResults = ref([])
-const invites = ref([])
-const loadingInvites = ref(false)
+const form = reactive({ full_name: '', signature: '' })
 
-const form = reactive({
-  username: '',
-  full_name: '',
-  email: '',
-  password: '',
-  role: 'user',
-  is_active: true,
-})
+// 没有 PermUserManage 的人进来只能看。判据是权限码而不是"是不是管理员" ——
+// 服务端那一条接口挂的就是这个码, 而界面这一份只是提前把话说清楚(点下去会 403)。
+const canManage = computed(() => auth.hasPerm('task-system:user:manage'))
 
-// 当前编辑行是否允许改角色/启用状态（管理员或自己不可改）
-const canChangePrivilege = computed(() => {
-  if (!editing.value) return true
-  return editing.value.role !== 'admin' && editing.value.id !== auth.user?.id
-})
-
-const rules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  email: [{ required: true, message: '请输入邮箱', trigger: 'blur' }],
-  password: [
-    {
-      validator: (_, value, cb) => {
-        if (!editing.value && !value) return cb(new Error('请输入密码'))
-        if (value && value.length < 6) return cb(new Error('密码至少6位'))
-        cb()
-      },
-      trigger: 'blur',
-    },
-  ],
-}
-
-function formatDate(value) {
-  return value ? String(value).slice(0, 10) : '-'
-}
-
-// ===== 用户列表 =====
 async function load() {
   loading.value = true
   try {
@@ -258,47 +125,22 @@ async function load() {
   }
 }
 
-function openCreate() {
-  editing.value = null
-  Object.assign(form, { username: '', full_name: '', email: '', password: '', role: 'user', is_active: true })
-  dialogVisible.value = true
-}
-
 function openEdit(row) {
   editing.value = row
-  Object.assign(form, {
-    username: row.username,
-    full_name: row.full_name,
-    email: row.email,
-    password: '',
-    role: row.role,
-    is_active: row.is_active,
-  })
+  form.full_name = row.full_name || ''
+  form.signature = row.signature || ''
   dialogVisible.value = true
 }
 
 async function submit() {
-  try {
-    await formRef.value.validate()
-  } catch {
-    return
-  }
+  if (!editing.value) return
   saving.value = true
   try {
-    const payload = { ...form }
-    if (!payload.password) delete payload.password
-    if (editing.value) {
-      // 管理员/本人行的角色与状态后端禁止修改，前端一并剔除
-      if (editing.value.role === 'admin' || editing.value.id === auth.user?.id) {
-        delete payload.role
-        delete payload.is_active
-      }
-      await userApi.update(editing.value.id, payload)
-      ElMessage.success('用户已更新')
-    } else {
-      await userApi.create(payload)
-      ElMessage.success('用户已创建')
-    }
+    await userApi.update(editing.value.id, {
+      full_name: form.full_name,
+      signature: form.signature,
+    })
+    ElMessage.success('用户档案已更新')
     dialogVisible.value = false
     load()
   } catch {
@@ -312,115 +154,26 @@ async function toggleActive(row) {
   const action = row.is_active ? '停用' : '启用'
   try {
     await ElMessageBox.confirm(
-      `${action}用户「${row.full_name || row.username}」？${action === '停用' ? '该用户将立即无法登录和使用。' : ''}`,
+      `${action}「${row.full_name || row.username}」？` +
+        (row.is_active
+          ? '停用后他仍然能登录，但不会再出现在任务负责人的候选里。要真正禁止他进入躬行，请到 OneLink 收回角色授权。'
+          : ''),
       '提示',
-      { type: action === '停用' ? 'warning' : 'info' },
+      { type: row.is_active ? 'warning' : 'info' },
     )
   } catch {
     return
   }
   try {
     await userApi.update(row.id, { is_active: !row.is_active })
-    ElMessage.success(`已${action}用户`)
+    ElMessage.success(`已${action}`)
     load()
   } catch {
     /* 拦截器已提示 */
   }
 }
 
-// ===== 注册开关 =====
-async function loadSettings() {
-  try {
-    const data = await adminApi.settings()
-    registrationEnabled.value = !!data.registration_enabled
-  } catch {
-    /* 忽略 */
-  }
-}
-
-async function toggleRegistration(value) {
-  savingSetting.value = true
-  try {
-    await adminApi.setRegistration(value)
-    ElMessage.success(value ? '已开放注册' : '已暂停注册')
-  } catch {
-    registrationEnabled.value = !value
-  } finally {
-    savingSetting.value = false
-  }
-}
-
-// ===== 邀请注册 =====
-async function loadInvites() {
-  loadingInvites.value = true
-  try {
-    const data = await adminApi.invites()
-    invites.value = data.items || []
-  } catch {
-    /* 拦截器已提示 */
-  } finally {
-    loadingInvites.value = false
-  }
-}
-
-function parseEmails(text) {
-  return [...new Set(text.split(/[\n,;，；、\s]+/).map((s) => s.trim()).filter(Boolean))]
-}
-
-async function sendInvitesFor(emailList) {
-  sendingInvite.value = true
-  try {
-    const data = await adminApi.createInvites(emailList)
-    const results = data.results || []
-    inviteResults.value = results
-    const okCount = results.filter((r) => r.ok).length
-    // 取第一条成功结果判断发信模式：results[0] 可能是一条失败项，
-    // 用它会让开发模式下的文案错报成「已发送邮件」
-    const firstOk = results.find((r) => r.ok)
-    if (okCount > 0) {
-      ElMessage.success(`已为 ${okCount} 个邮箱${firstOk?.dev ? '生成邀请链接（未配置 SMTP）' : '发送邀请邮件'}`)
-    }
-    if (okCount === emailList.length) inviteEmails.value = ''
-    loadInvites()
-  } catch {
-    /* 拦截器已提示 */
-  } finally {
-    sendingInvite.value = false
-  }
-}
-
-async function sendInvites() {
-  const emailList = parseEmails(inviteEmails.value)
-  if (!emailList.length) return ElMessage.warning('请先输入受邀邮箱')
-  if (emailList.length > 20) return ElMessage.warning('单次最多邀请 20 个邮箱')
-  await sendInvitesFor(emailList)
-}
-
-async function resendInvite(row) {
-  inviteResults.value = []
-  await sendInvitesFor([row.email])
-}
-
-async function revokeInvite(row) {
-  try {
-    await ElMessageBox.confirm(`撤销对「${row.email}」的邀请？撤销后该邀请链接将立即失效。`, '提示', { type: 'warning' })
-  } catch {
-    return
-  }
-  try {
-    await adminApi.revokeInvite(row.id)
-    ElMessage.success('邀请已撤销')
-    loadInvites()
-  } catch {
-    /* 拦截器已提示 */
-  }
-}
-
-onMounted(() => {
-  load()
-  loadSettings()
-  loadInvites()
-})
+onMounted(load)
 </script>
 
 <style scoped>
@@ -439,75 +192,6 @@ onMounted(() => {
 }
 .card-title {
   font-weight: 600;
-}
-.card-desc-inline {
-  color: #9ca3af;
-  font-size: 12px;
-  margin-left: 8px;
-}
-.switch-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-.card-desc {
-  margin: 4px 0 0;
-  color: #9ca3af;
-  font-size: 12px;
-}
-.invite-input-row {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
-.invite-send {
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-.invite-results {
-  margin-top: 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  overflow: hidden;
-}
-.invite-result-item {
-  display: flex;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid #f3f4f6;
-  font-size: 13px;
-}
-.invite-result-item:last-child {
-  border-bottom: none;
-}
-.invite-result-item .ok {
-  color: #059669;
-}
-.invite-result-item .err {
-  color: #dc2626;
-}
-.result-email {
-  font-weight: 500;
-}
-.result-reason {
-  color: #9ca3af;
-  font-size: 12px;
-  margin-top: 2px;
-}
-.invite-url {
-  color: #2563eb;
-  font-size: 12px;
-  word-break: break-all;
-  text-decoration: none;
-  display: inline-block;
-  margin-top: 2px;
-}
-.invite-url:hover {
-  text-decoration: underline;
-}
-.invite-list {
-  margin-top: 12px;
 }
 .user-cell {
   display: flex;
@@ -533,5 +217,11 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+.dialog-hint {
+  margin: 0;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>

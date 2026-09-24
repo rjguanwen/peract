@@ -21,6 +21,7 @@ import (
 	"taskbackend/internal/handler"
 	"taskbackend/internal/middleware"
 	"taskbackend/internal/onelink"
+	"taskbackend/internal/perms"
 	"taskbackend/internal/scheduler"
 	"taskbackend/internal/service"
 )
@@ -49,12 +50,12 @@ func run() error {
 
 	// 会话与档案先建, 它们要交给 handler 挂路由。没配 OneLink 时两者为 nil,
 	// handler 的 RegisterRoutes 会整族跳过(见那里的注释) —— 那种状态只该出现在本地开发。
-	guard, profiles, sessionStore, err := buildOnelink(cfg, db)
+	guard, profiles, sessionStore, permPull, unread, err := buildOnelink(cfg, db)
 	if err != nil {
 		return err
 	}
 
-	h := handler.New(db, cfg, guard, profiles, notifier)
+	h := handler.New(db, cfg, guard, profiles, notifier, permPull, unread)
 	sched := scheduler.New(db, cfg, notifier)
 	sched.Start()
 
@@ -132,21 +133,30 @@ func run() error {
 	return nil
 }
 
-// buildOnelink 装配 OneLink 接入层, 返回守卫、本地档案与会话存储。
+// buildOnelink 装配 OneLink 接入层, 返回守卫、本地档案、会话存储与两个平台入站端点。
 //
-// 没配齐时回 (nil, nil, nil, nil) 而不是报错: 本地开发(只想跑业务接口、或平台还没搭起来)
-// 不该因为缺一个环境变量而起不来。生产环境下 config.validate 已经把"没配"变成启动失败,
-// 所以这个分支只会在开发环境走到。
+// 没配齐时回 (nil, nil, nil, nil, nil, nil) 而不是报错: 本地开发(只想跑业务接口、或平台
+// 还没搭起来)不该因为缺一个环境变量而起不来。生产环境下 config.validate 已经把"没配"
+// 变成启动失败, 所以这个分支只会在开发环境走到。
 //
-// 三个部件的分工(都在 internal/onelink 里):
+// 五个部件的分工(前三个都在 internal/onelink 里):
 //   - Store 把会话放进躬行自己的 SQLite —— 用 SDK 的 MemoryStore 的代价是"发布一次
 //     全体被踢回门户";
 //   - Profiles 在每次通过守卫的请求上把平台身份落成本地 user.id, 业务表外键靠它;
 //   - Guard 是 SDK 的守卫, 它负责落地票据、续期、以及轮询会话存活(单点登出的滞后由
 //     AliveInterval 决定)。
-func buildOnelink(cfg *config.Config, db *gorm.DB) (*onelinksdk.Guard, *onelink.Profiles, *onelink.Store, error) {
+//   - permPull 是**反方向**的入口之一: 平台在管理台上点"拉取权限点"时来取躬行的清单
+//     (见 SDK 的 NewPermPullHandler)。它挂在登录守卫之外 —— 调用方是平台, 那里没有
+//     会话, 而它的守卫是平台签名(用躬行自己的密钥验)。清单取 internal/perms.Manifest:
+//     与 cmd/perm-sync 上报的是同一份, 于是"上报写进去的"与"拉取读出来的"不可能不同。
+//   - unread 是同方向的另一个入口: 平台问"**某个人**在躬行有多少未读提醒", 用来画门户上
+//     躬行那张卡片的角标(见 SDK 的 NewUnreadHandler)。它与 permPull 共用同一把密钥, 但
+//     平台侧用的是另一份待签名串(多一段 userId), 所以两边不可能互相冒充。回调落到
+//     handler.CountUnreadByPlatformUser —— 与躬行自己的未读数接口**同一个口径**。
+func buildOnelink(cfg *config.Config, db *gorm.DB) (
+	*onelinksdk.Guard, *onelink.Profiles, *onelink.Store, http.Handler, http.Handler, error) {
 	if !cfg.OnelinkConfigured() {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil
 	}
 
 	client, err := onelinksdk.New(onelinksdk.Config{
@@ -155,12 +165,12 @@ func buildOnelink(cfg *config.Config, db *gorm.DB) (*onelinksdk.Guard, *onelink.
 		AppSecret: cfg.OnelinkAppSecret,
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("初始化 OneLink 客户端: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("初始化 OneLink 客户端: %w", err)
 	}
 
 	store := onelink.NewStore(db)
 	if err := store.Migrate(); err != nil {
-		return nil, nil, nil, fmt.Errorf("建立会话表: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("建立会话表: %w", err)
 	}
 
 	// 离线验签: 每个请求在本地验一次 RS256 + 受众 + 过期。它挡的是"伪造一个令牌骗过
@@ -169,7 +179,7 @@ func buildOnelink(cfg *config.Config, db *gorm.DB) (*onelinksdk.Guard, *onelink.
 	// "是伪造"会把一次平台抖动放大成登录循环。
 	verifier, err := onelinksdk.NewVerifier("onelink", cfg.OnelinkAppCode, client)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("初始化 OneLink 离线验签: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("初始化 OneLink 离线验签: %w", err)
 	}
 
 	guard, err := onelinksdk.NewGuard(onelinksdk.GuardConfig{
@@ -194,7 +204,47 @@ func buildOnelink(cfg *config.Config, db *gorm.DB) (*onelinksdk.Guard, *onelink.
 		}),
 	})
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("初始化 OneLink 守卫: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("初始化 OneLink 守卫: %w", err)
+	}
+
+	// 权限清单端点。**清单为空时这里直接启动失败**(SDK 的判据): 一个挂出来却是空清单的
+	// 端点配上平台侧的"停用清单外的行"会把躬行已有的权限点全部停用, 而它的成因几乎总是
+	// "清单被清空了" —— 那件事应该在这里炸, 不是等平台来拉的时候。
+	permPull, err := onelinksdk.NewPermPullHandler(onelinksdk.PullConfig{
+		Client:   client,
+		Manifest: perms.Manifest,
+		Logger:   log.New(os.Stderr, "[onelink] ", log.LstdFlags),
+		// AllowedIPs 留空: 主守卫是平台签名, 而来源名单的效果取决于躬行看到的对端地址
+		// 是不是平台 —— 两者之间有反向代理时 RemoteAddr 是代理, 那时名单拦不住
+		// "经由代理来的别人", 而填错它只会让一次拉取失败。真正的边界在网络层
+		// (内网监听 / 网关按来源放行平台出口), 见部署说明。
+	})
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("装配权限清单端点: %w", err)
+	}
+
+	// 用户态(未读数)端点。回调里只有一件业务事实: "这个平台用户在躬行有多少未读提醒",
+	// 而它的口径由 handler.CountUnreadByPlatformUser 定 —— 与躬行自己的未读数接口共用同一个
+	// clause, 所以门户上的角标与用户进去看到的未读数不可能是两个数。
+	//
+	// 认不出这个人时它返回 error(而不是 0): 那会让端点回 5xx, 平台把非 2xx 读成"取不到"
+	// 并在门户上显示一个灰色占位。回 200+0 则会被读成"确实没有未读", 用户就不会点进来了。
+	unread, err := onelinksdk.NewUnreadHandler(onelinksdk.UnreadConfig{
+		Client: client,
+		State: func(ctx context.Context, platformUserID int64) (onelinksdk.UserState, error) {
+			n, err := handler.CountUnreadByPlatformUser(ctx, db, platformUserID)
+			if err != nil {
+				return onelinksdk.UserState{}, err
+			}
+			return onelinksdk.UserState{Unread: n}, nil
+		},
+		Logger: log.New(os.Stderr, "[onelink] ", log.LstdFlags),
+		// AllowedIPs 留空, 理由同上面那条清单端点: 主守卫是平台签名, 而来源名单的效果
+		// 取决于躬行看到的对端地址是不是平台 —— 中间有反向代理时它是代理, 填错只会让
+		// 每一次未读数查询都失败(而那条失败在门户上只是一个灰色角标, 不会有人注意到)。
+	})
+	if err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("装配未读数端点: %w", err)
 	}
 
 	// 启动时清一遍彻底过期的会话行, 之后由 purgeLoop 周期清。
@@ -206,7 +256,15 @@ func buildOnelink(cfg *config.Config, db *gorm.DB) (*onelinksdk.Guard, *onelink.
 
 	log.Printf("OneLink 接入已挂载: 应用 %s, 平台 %s, 存活轮询 %s",
 		cfg.OnelinkAppCode, cfg.OnelinkBaseURL, cfg.OnelinkAliveInterval)
-	return guard, onelink.NewProfiles(db), store, nil
+	// 这一行是给运维抄的: 管理台上那个"权限清单拉取地址"填的就是它(前面补上躬行的对外
+	// 地址), 而两边不一致的表现是平台侧一句"拉取失败", 看不出是路径写错还是签名没过。
+	log.Printf("权限清单端点: %s(只有平台签名能取到; 管理台的\"权限清单拉取地址\"填这个路径)",
+		cfg.OnelinkPermPullPath)
+	// 同样给运维抄的一行。它填错(或没填)的表现比上面那条更安静: 门户上躬行那张卡片只是
+	// 不显示角标, 或者显示一个灰色问号 —— 没有一处会报错, 所以这一行日志是唯一的线索。
+	log.Printf("未读数端点: %s(只有平台签名能取到; 管理台的\"未读数拉取地址\"填这个路径)",
+		cfg.OnelinkUnreadPath)
+	return guard, onelink.NewProfiles(db), store, permPull, unread, nil
 }
 
 // purgeInterval 会话清理周期。一小时是随手定的一个"比刷新令牌寿命短得多、又不会

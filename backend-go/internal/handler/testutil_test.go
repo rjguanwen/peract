@@ -26,6 +26,7 @@ import (
 	"taskbackend/internal/database"
 	"taskbackend/internal/model"
 	"taskbackend/internal/onelink"
+	"taskbackend/internal/perms"
 	"taskbackend/internal/service"
 )
 
@@ -71,11 +72,13 @@ func newTestEnvWith(t *testing.T, mutate func(*config.Config)) *testEnv {
 		AppBaseURL:  "http://test.local",
 		// 接入配置给全: 缺了它 RegisterRoutes 会整族跳过(见 handler.go), 那样所有用例
 		// 都会得到 404, 而 404 看起来像"路由写错了", 归因方向完全被带偏。
-		OnelinkAppCode:   "task-system",
-		OnelinkBaseURL:   "http://onelink.test",
-		OnelinkPortalURL: "http://portal.test",
-		OnelinkAppSecret: "unit-test-app-secret",
-		MaxBodyBytes:     1 << 20,
+		OnelinkAppCode:      "task-system",
+		OnelinkBaseURL:      "http://onelink.test",
+		OnelinkPortalURL:    "http://portal.test",
+		OnelinkAppSecret:    "unit-test-app-secret",
+		OnelinkPermPullPath: "/onelink/perm-manifest",
+		OnelinkUnreadPath:   "/onelink/unread",
+		MaxBodyBytes:        1 << 20,
 		NotifyWorkers:    1,
 		NotifyQueueSize:  256,
 	}
@@ -125,10 +128,38 @@ func newTestEnvWith(t *testing.T, mutate func(*config.Config)) *testEnv {
 		t.Fatalf("构造 OneLink 守卫: %v", err)
 	}
 
+	// 权限清单端点用真的那一份清单(perms.Manifest): 夹具不另造一份, 否则这里测过的
+	// 东西与生产跑的不是同一个 —— 而这个端点的全部内容就是那份清单。
+	permPull, err := onelinksdk.NewPermPullHandler(onelinksdk.PullConfig{
+		Client:   client,
+		Manifest: perms.Manifest,
+	})
+	if err != nil {
+		t.Fatalf("装配权限清单端点: %v", err)
+	}
+
+	// 用户态端点用**真的那一个回调**(CountUnreadByPlatformUser), 不另造一份: 这一层要测的
+	// 正是"口径" —— 门户角标与躬行自己的未读数接口必须同值, 而换一个假回调就等于把那条
+	// 判据挪出测试范围了。
+	unread, err := onelinksdk.NewUnreadHandler(onelinksdk.UnreadConfig{
+		Client: client,
+		State: func(ctx context.Context, platformUserID int64) (onelinksdk.UserState, error) {
+			n, err := CountUnreadByPlatformUser(ctx, db, platformUserID)
+			if err != nil {
+				return onelinksdk.UserState{}, err
+			}
+			return onelinksdk.UserState{Unread: n}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("装配未读数端点: %v", err)
+	}
+
 	// 通知投递器只建不 Start：入队不阻塞，测试也不该去连外部服务
 	notifier := service.NewNotifier(cfg)
 	profiles := onelink.NewProfiles(db)
-	h := New(db, cfg, guard, profiles, notifier)
+	h := New(db, cfg, guard, profiles, notifier, permPull, unread)
+
 
 	engine := gin.New()
 	engine.Use(gin.Recovery())

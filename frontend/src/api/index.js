@@ -127,6 +127,11 @@ export const taskApi = {
   update: (id, data) => api.patch(`/tasks/${id}`, data),
   remove: (id) => api.delete(`/tasks/${id}`),
   addProgress: (id, data) => api.post(`/tasks/${id}/progress`, data),
+  // 里程碑(计划节点)。**没有** list: 它们随 get(id) 一起回来(见后端 TaskDetailOut 的注释)——
+  // 这个功能要的就是"计划与进展并排看", 拆成两次请求会在两次响应之间露出一个中间状态。
+  addMilestone: (id, data) => api.post(`/tasks/${id}/milestones`, data),
+  updateMilestone: (id, mid, data) => api.patch(`/tasks/${id}/milestones/${mid}`, data),
+  removeMilestone: (id, mid) => api.delete(`/tasks/${id}/milestones/${mid}`),
   deleted: (params) => api.get('/tasks/deleted', { params }),
   restore: (id) => api.post(`/tasks/${id}/restore`),
   // 任务分享

@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -124,6 +127,44 @@ func (h *Handler) UnreadCount(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"count": count})
+}
+
+// CountUnreadByPlatformUser 按**平台用户主键**数这个人在躬行的未读提醒。
+//
+// 平台的用户态端点(接入规范第 6.3 节)用它回答"当前登录者在躬行有多少未读", 也就是门户上
+// 躬行那张卡片右上角的角标。三点说明:
+//
+//  1. **口径与 UnreadCount 逐字相同**(同一个 unreadableClause), 这是刻意的: 门户上的角标
+//     与用户在躬行内看到的未读数必须是同一个数。两份口径一旦分叉, 现象是"角标说 3, 点进去
+//     一条未读也没有", 而两个数字各自都算得对 —— 那是最难解释的一类不一致。
+//  2. 平台传进来的是 `user.onelink_uid`(平台的用户主键), **不是**本地 `user.id`。两者的
+//     分工见 model.User 的注释: 业务外键用本地主键, 映射用 onelink_uid。
+//  3. 认不出这个人时**返回错误**, 不返回 0。返回 0 会被平台读成"这个人确实没有未读", 于是
+//     用户看到一个干净的角标、不去打开躬行; 而事实是这个平台账号在躬行还没有本地档案
+//     (他还没通过 SSO 进来过)。返回错误会让那一格显示"取不到"并留一条日志 —— 那才是事实。
+//
+// 不加 is_active 过滤: 角标回答的是"有多少事在等你", 而不是"你还能不能被指派任务"。
+// 那个开关是业务口径(见 model.User), 与未读无关; 而一个被临时停用的人本来就还能登录。
+func CountUnreadByPlatformUser(ctx context.Context, db *gorm.DB, platformUserID int64) (int64, error) {
+	var u model.User
+	err := db.WithContext(ctx).Select("id").
+		Where("onelink_uid = ?", platformUserID).
+		Take(&u).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return 0, fmt.Errorf("平台用户 %d 在躬行没有本地档案(还没通过 SSO 进来过)", platformUserID)
+	case err != nil:
+		return 0, fmt.Errorf("查本地档案失败(平台用户 %d): %w", platformUserID, err)
+	}
+
+	var count int64
+	if err := db.WithContext(ctx).Model(&model.Reminder{}).
+		Where("user_id = ?", u.ID).
+		Where(unreadableClause, true, time.Now()).
+		Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("统计未读提醒失败(本地用户 %d): %w", u.ID, err)
+	}
+	return count, nil
 }
 
 // CreateReminder POST /reminders

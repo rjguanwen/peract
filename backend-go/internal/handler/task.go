@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,6 +22,18 @@ const (
 	maxCommentLen   = 5000
 	defaultPageSize = 20
 	maxPageSize     = 100
+
+	// 里程碑的三条限制。标题比任务标题短得多: 它填的是一个**节点名**("提测"/"上线"),
+	// 不是一段说明 —— 留出 255 只会让人把说明写进标题, 然后真正的说明那一栏空着。
+	maxMilestoneTitleLen = 128
+	maxMilestoneNoteLen  = 500
+	// maxMilestonesPerTask 一个任务的里程碑上限。
+	//
+	// 50 这个数不是从性能来的(这张表小到不值得谈性能), 而是从**语义**来的: 里程碑是
+	// "关键节点", 而一个任务有五十个关键节点的时候, 那个清单已经变成了任务清单本身,
+	// 它要回答的问题("我打算什么时候到哪一步")在这之前就被淹掉了。划一条线, 是让这个
+	// 上限变成一个必须被显式回答的问题, 而不是在某次误导入之后才发现有人建了两千条。
+	maxMilestonesPerTask = 50
 )
 
 type TaskOut struct {
@@ -54,9 +67,30 @@ type TaskProgressOut struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// TaskMilestoneOut 一个计划节点。
+//
+// 这里**没有**"是否达成""实际完成时间""偏差天数"这类字段, 而且这不是遗漏: 达成与否是
+// 计划与进展**比出来**的结论, 不是一个可以存在某一侧的属性。把它算成字段, 就等于在服务端
+// 钉死一套判定("有进展记录晚于计划时间就算达成"?), 而真实情形里那句话经常是错的 ——
+// 人们会在计划时间之后补一条"其实早就完成了"的备注。结论留给看的人下, 服务端只保证
+// 两串时间都是原样的、可对齐的。
+type TaskMilestoneOut struct {
+	ID        uint           `json:"id"`
+	TaskID    uint           `json:"task_id"`
+	Title     string         `json:"title"`
+	PlannedAt model.DateTime `json:"planned_at"`
+	Note      string         `json:"note"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
 type TaskDetailOut struct {
 	TaskOut
 	Progresses []TaskProgressOut `json:"progresses"`
+	// Milestones 计划节点。它与 Progresses **一起**返回, 而不是另开一条 GET:
+	// 这个功能的全部意义就是"两串并排看", 拆成两次请求会让前端在两次响应之间拿到一个
+	// 中间状态(有进展、没计划), 而那个状态的界面看起来像"计划丢了" —— 用户会去重新录一遍。
+	Milestones []TaskMilestoneOut `json:"milestones"`
 }
 
 type taskCreateReq struct {
@@ -85,6 +119,28 @@ type progressCreateReq struct {
 	Comment  string  `json:"comment"`
 	Progress *int    `json:"progress"`
 	Status   *string `json:"status"`
+}
+
+type milestoneCreateReq struct {
+	// 这里**不**挂 binding:"required"。三条必填判据统一由 normalizeMilestone 给,
+	// 于是"名称为空"与"名称只有空白"得到的是同一句人话。挂上它之后, 空名称会先被
+	// validator 拦下, 而它的报错里带着 Go 的结构体名("milestoneCreateReq.Title") ——
+	// 那句是给开发者看的, 却会原样出现在界面上(判据同 AddShare: 那里也是手工把
+	// binding 的错误翻译成"请提供有效的被分享者邮箱")。
+	Title     string          `json:"title"`
+	PlannedAt *model.DateTime `json:"planned_at"`
+	Note      string          `json:"note"`
+}
+
+// milestoneUpdateReq 是 PATCH 语义的局部更新请求: 指针为 nil 表示"本次不改"。
+//
+// 这里**没有** clear_* 标志, 而 taskUpdateReq 有 —— 判据是"这个字段能不能为空":
+// 任务的负责人与截止时间可以为空(所以需要一个显式的清空开关把"不改"与"改成空"分开),
+// 而里程碑的名称与计划时间都不能为空。少一个必填字段, 那个节点就不再是计划。
+type milestoneUpdateReq struct {
+	Title     *string         `json:"title"`
+	PlannedAt *model.DateTime `json:"planned_at"`
+	Note      *string         `json:"note"`
 }
 
 // pendingNotice 事务提交后才投递的外部通知，避免回滚后仍发出假通知。
@@ -144,6 +200,18 @@ func toTaskOut(t *model.Task) TaskOut {
 		CreatedAt:    t.CreatedAt,
 		UpdatedAt:    t.UpdatedAt,
 		DeletedAt:    deletedAt,
+	}
+}
+
+func toMilestoneOut(m *model.TaskMilestone) TaskMilestoneOut {
+	return TaskMilestoneOut{
+		ID:        m.ID,
+		TaskID:    m.TaskID,
+		Title:     m.Title,
+		PlannedAt: m.PlannedAt,
+		Note:      m.Note,
+		CreatedAt: m.CreatedAt,
+		UpdatedAt: m.UpdatedAt,
 	}
 }
 
@@ -479,10 +547,25 @@ func (h *Handler) GetTask(c *gin.Context) {
 		return
 	}
 
+	// 计划节点。按计划时间升序 —— 详情页把它与进展记录合并成一条时间轴, 而"计划"
+	// 那一侧的排序只有一种有意义的读法: 按它打算发生的时间。
+	//
+	// 排序里带上 id 作为第二段: 同一时刻的两个节点(很常见, 比如"提测"与"发通知")
+	// 若只按时间排, 两次请求可能给出不同的顺序, 而界面上会表现为"刷新一下顺序就变了"。
+	var milestones []model.TaskMilestone
+	if err := h.db.Where("task_id = ?", id).Order("planned_at, id").Find(&milestones).Error; err != nil {
+		fail(c, http.StatusInternalServerError, "查询里程碑失败")
+		return
+	}
+
 	out := TaskDetailOut{TaskOut: toTaskOut(&task)}
 	out.Progresses = make([]TaskProgressOut, 0, len(progresses))
 	for i := range progresses {
 		out.Progresses = append(out.Progresses, toProgressOut(&progresses[i]))
+	}
+	out.Milestones = make([]TaskMilestoneOut, 0, len(milestones))
+	for i := range milestones {
+		out.Milestones = append(out.Milestones, toMilestoneOut(&milestones[i]))
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -849,6 +932,200 @@ func (h *Handler) AddProgress(c *gin.Context) {
 		log.Printf("[任务进展] 回读提交人失败：%v", err)
 	}
 	c.JSON(http.StatusOK, toProgressOut(&record))
+}
+
+// ---------------------------- 里程碑(计划) ----------------------------
+//
+// 三个入口共用同一套判据, 写在这里一次:
+//
+//   - **读**: 由路由上的 RequirePerm(PermTaskList) + canViewTask 管 —— 计划随详情页
+//     一起返回, 不另开 GET(理由见 TaskDetailOut.Milestones 的注释)。
+//   - **写**: RequirePerm(PermTaskUpdate) + canModify, 与"改状态/加进展"**完全同一套**。
+//
+// 为什么不为里程碑单独开一个权限点: 它是任务计划的一部分, 而"能改这个任务的人"就是
+// "能定这个任务的计划的人"。拆成两个码的实际后果是新建一个应用之后要再授一次权,
+// 而"新功能上线后没人能用"是这类改动最容易引入的故障 —— 它不报错, 只是界面上那几个
+// 按钮不出现, 而排查方向会被带到前端。真要拆出去时, 判据应当是"有一种人的职责是定
+// 计划但不碰执行", 而不是"它是一张新表"。
+
+// touchTaskPlan 把"任务的计划被改过"落到 tasks.updated_at 上, 与里程碑的写入同事务。
+//
+// 判据同 AddProgress: 进展与计划都是"这个任务身上发生的事", 而详情页上那个"更新时间"
+// 就是给人看这件事的。两处只动一处的后果是"改了计划, 但更新时间没动" —— 那看起来
+// 像改动没保存成功, 而人会再改一遍。
+//
+// 单条 UPDATE 而不是 saveTask: 后者会把内存里的关联一并写回(见 saveTask 的注释),
+// 而这里要改的只有一列。
+func touchTaskPlan(tx *gorm.DB, taskID uint) error {
+	return tx.Model(&model.Task{}).Where("id = ?", taskID).
+		UpdateColumn("updated_at", time.Now()).Error
+}
+
+// normalizeMilestone 校验并归一化一条计划节点。
+//
+// 三条判据指向同一件事: **计划不能是空的**。名称为空、或没有时间的节点在界面上会渲染
+// 成一条没有任何信息的横线, 而它还会参与时间轴排序 —— 那种行除了让人以为"数据坏了"
+// 之外没有别的用途。
+func normalizeMilestone(title, note string, planned *model.DateTime) (string, string, model.DateTime, error) {
+	t := strings.TrimSpace(title)
+	switch {
+	case t == "":
+		return "", "", model.DateTime{}, errors.New("请填写里程碑名称")
+	case len([]rune(t)) > maxMilestoneTitleLen:
+		return "", "", model.DateTime{}, fmt.Errorf("里程碑名称最多 %d 字", maxMilestoneTitleLen)
+	case planned == nil || planned.IsZero():
+		return "", "", model.DateTime{}, errors.New("请选择里程碑的计划时间")
+	case len([]rune(note)) > maxMilestoneNoteLen:
+		return "", "", model.DateTime{}, fmt.Errorf("备注最多 %d 字", maxMilestoneNoteLen)
+	}
+	return t, note, *planned, nil
+}
+
+// loadMilestone 取本任务下的一个节点, 失败时已写好响应。
+//
+// 归属(task_id)与主键**一起**作为查询条件, 而不是先按 id 取出来再比较:
+// 只按 id 查会允许"用 A 任务的路径改 B 任务的节点" —— 而那条路径上的权限判定刚刚
+// 才为 A 做过。把归属放进 WHERE, 这种请求在数据库那一层就查不到东西, 于是它得到的
+// 是一句"里程碑不存在", 而不是一次越权。
+func (h *Handler) loadMilestone(c *gin.Context, taskID uint) (*model.TaskMilestone, bool) {
+	mid, err := strconv.Atoi(c.Param("mid"))
+	if err != nil || mid <= 0 {
+		badRequest(c, "里程碑 ID 不合法")
+		return nil, false
+	}
+	var m model.TaskMilestone
+	if err := h.db.Where("id = ? AND task_id = ?", mid, taskID).First(&m).Error; err != nil {
+		notFound(c, "里程碑不存在")
+		return nil, false
+	}
+	return &m, true
+}
+
+// AddMilestone POST /tasks/:id/milestones
+func (h *Handler) AddMilestone(c *gin.Context) {
+	task, ok := h.loadTask(c)
+	if !ok {
+		return
+	}
+	if !h.canModify(c, task) {
+		forbidden(c, "只有创建者、负责人或有全部任务权限的人可以设定里程碑")
+		return
+	}
+	var req milestoneCreateReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, "参数不合法："+err.Error())
+		return
+	}
+	title, note, planned, err := normalizeMilestone(req.Title, req.Note, req.PlannedAt)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+
+	// 条数上限在写之前查, 而不是靠唯一索引: 这里没有可以借力的唯一约束 ——
+	// 同一个任务上有两个同名节点是完全正常的("评审"来回两次)。
+	var count int64
+	if err := h.db.Model(&model.TaskMilestone{}).Where("task_id = ?", task.ID).Count(&count).Error; err != nil {
+		fail(c, http.StatusInternalServerError, "查询里程碑失败")
+		return
+	}
+	if count >= maxMilestonesPerTask {
+		badRequest(c, fmt.Sprintf("一个任务最多 %d 个里程碑", maxMilestonesPerTask))
+		return
+	}
+
+	m := model.TaskMilestone{TaskID: task.ID, Title: title, PlannedAt: planned, Note: note}
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&m).Error; err != nil {
+			return err
+		}
+		return touchTaskPlan(tx, task.ID)
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "保存里程碑失败")
+		return
+	}
+	c.JSON(http.StatusCreated, toMilestoneOut(&m))
+}
+
+// UpdateMilestone PATCH /tasks/:id/milestones/:mid
+func (h *Handler) UpdateMilestone(c *gin.Context) {
+	task, ok := h.loadTask(c)
+	if !ok {
+		return
+	}
+	if !h.canModify(c, task) {
+		forbidden(c, "只有创建者、负责人或有全部任务权限的人可以修改里程碑")
+		return
+	}
+	m, ok := h.loadMilestone(c, task.ID)
+	if !ok {
+		return
+	}
+	var req milestoneUpdateReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, "参数不合法："+err.Error())
+		return
+	}
+
+	// 局部更新: 先把"改完之后的完整形态"拼出来再交给同一套校验, 而不是逐个字段各判一次。
+	// 后者会让"只改备注"与"同时改名称和时间"走两条不同的判定路径, 而两条路径迟早不一致。
+	title, note, planned := m.Title, m.Note, m.PlannedAt
+	if req.Title != nil {
+		title = *req.Title
+	}
+	if req.Note != nil {
+		note = *req.Note
+	}
+	if req.PlannedAt != nil {
+		planned = *req.PlannedAt
+	}
+	newTitle, newNote, newPlanned, err := normalizeMilestone(title, note, &planned)
+	if err != nil {
+		badRequest(c, err.Error())
+		return
+	}
+	m.Title, m.Note, m.PlannedAt = newTitle, newNote, newPlanned
+
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(m).Error; err != nil {
+			return err
+		}
+		return touchTaskPlan(tx, task.ID)
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "保存里程碑失败")
+		return
+	}
+	c.JSON(http.StatusOK, toMilestoneOut(m))
+}
+
+// DeleteMilestone DELETE /tasks/:id/milestones/:mid
+//
+// 真删, 不是逻辑删除: 计划节点没有"回收站"这个读者(对比 Task —— 那里的逻辑删除是为
+// 了回收站页面)。留一行看不见的节点只会让"这个任务到底有几个节点"变成一个需要带
+// 条件才能问清楚的问题。
+func (h *Handler) DeleteMilestone(c *gin.Context) {
+	task, ok := h.loadTask(c)
+	if !ok {
+		return
+	}
+	if !h.canModify(c, task) {
+		forbidden(c, "只有创建者、负责人或有全部任务权限的人可以删除里程碑")
+		return
+	}
+	m, ok := h.loadMilestone(c, task.ID)
+	if !ok {
+		return
+	}
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&model.TaskMilestone{}, m.ID).Error; err != nil {
+			return err
+		}
+		return touchTaskPlan(tx, task.ID)
+	}); err != nil {
+		fail(c, http.StatusInternalServerError, "删除里程碑失败")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 // saveTask 只写任务本体。

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -60,13 +61,34 @@ type Handler struct {
 	guard    *onelinksdk.Guard
 	profiles *onelink.Profiles
 	notify   *service.Notifier
+	// permPull 权限清单端点(平台 -> 躬行的两条入站调用之一)。
+	//
+	// 它是 SDK 的 NewPermPullHandler 的返回值 —— 那一个 handler 把"验平台签名"与
+	// "应答清单"合在一起, 所以这里没有"只取清单自己包一层"的走法。装配期由 cmd/server
+	// 传进来而不是在这里自己建: 建它需要平台客户端与那份清单, 而它们都在接入层。
+	//
+	// 为 nil 时(没配 OneLink)那条路由不挂 —— 不是"降级运行", 而是那时连密钥都没有,
+	// 挂上去只会得到一个永远 401 的端点。
+	permPull http.Handler
+	// unread 用户态(未读数)端点, 平台的另一条入站调用。
+	//
+	// 与 permPull 并列而不是合成一个"平台端点"开关: 两条端点的调用频率差三个数量级
+	// (清单是管理员点一次, 未读数是每个用户每次打开工作台), 部署时可能只放开其中一条。
+	//
+	// 它同样是 SDK 的 NewUnreadHandler 的返回值(验签 + 应答合一), 同样挂在登录守卫之外,
+	// 但它的应答按 **userId** 给 —— 所以它比 permPull 更不能接受浏览器会话: 认会话就等于
+	// 给了任何登录用户一个"查别人有多少未读"的枚举器(接入规范 P0 第 19 条)。
+	//
+	// 为 nil 时那条路由不挂。那时门户上躬行这张卡片不显示角标, 而**不是**显示 0。
+	unread http.Handler
 
 	uploadDir string
 }
 
-// New 构造。guard 与 profiles 由 cmd/server 装配好传进来 —— 它们是接入层的东西,
-// 让 handler 自己按配置去建会在测试里多出一个"假平台", 而这一层要测的是业务语义。
-func New(db *gorm.DB, cfg *config.Config, guard *onelinksdk.Guard, profiles *onelink.Profiles, notify *service.Notifier) *Handler {
+// New 构造。guard / profiles / 两个平台入站端点由 cmd/server 装配好传进来 —— 它们是接入层
+// 的东西, 让 handler 自己按配置去建会在测试里多出一个"假平台", 而这一层要测的是业务语义。
+func New(db *gorm.DB, cfg *config.Config, guard *onelinksdk.Guard, profiles *onelink.Profiles,
+	notify *service.Notifier, permPull, unread http.Handler) *Handler {
 	dir, err := filepath.Abs(cfg.UploadDir)
 	if err != nil {
 		dir = cfg.UploadDir
@@ -81,6 +103,8 @@ func New(db *gorm.DB, cfg *config.Config, guard *onelinksdk.Guard, profiles *one
 		guard:     guard,
 		profiles:  profiles,
 		notify:    notify,
+		permPull:  permPull,
+		unread:    unread,
 		uploadDir: dir,
 	}
 }
@@ -137,6 +161,28 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.GET("/sso/landing", gin.WrapF(h.guard.HandleTicket))
 	r.POST("/logout", gin.WrapF(h.guard.Logout))
 
+	// 权限清单端点。同样在守卫**之外**, 但理由与上面两条不同: 它的调用方是**平台**,
+	// 那里没有浏览器、没有会话、也没有权限点快照 —— 套上 RequireLogin 会让平台拿到一个
+	// 401, 而它会把 401 读成"应用拒绝了这次拉取"(60020), 于是排查方向被带到密钥上去。
+	//
+	// 它的守卫在 handler 内部(平台签名), 见 SDK 的 NewPermPullHandler: 那个构造函数
+	// 返回的就是"验签 + 应答"合起来的那一个 handler, 所以这里不存在"忘了包一层"的写法。
+	// 部署时这个路径还应当被网络层再收一层(只允许平台出口访问), 见部署说明。
+	if h.permPull != nil {
+		r.GET(h.cfg.OnelinkPermPullPath, gin.WrapH(h.permPull))
+	}
+
+	// 用户态(未读数)端点。位置与上一条完全一样, 理由也一样(调用方是平台), 但它多一层
+	// 不能破例的东西: 它按 query 里的 userId 回答, 所以**绝不能**接受浏览器会话 ——
+	// 认会话就等于让任何登录用户拿自己的 cookie 去问"别人有多少未读"。
+	//
+	// 平台侧对这条端点的失败是**降级**而不是报错(某一格显示"取不到"并留一条日志),
+	// 所以它回 5xx 是安全的; 但回调不能回 200 + 0 来表达失败 —— 平台把 0 读成"这个人
+	// 确实没有未读", 用户会因此不去打开躬行。判据见 CountUnreadByPlatformUser 的注释。
+	if h.unread != nil {
+		r.GET(h.cfg.OnelinkUnreadPath, gin.WrapH(h.unread))
+	}
+
 	api := r.Group("/api/v1", middleware.BodySizeLimit(h.cfg.MaxBodyBytes))
 
 	// 需要登录。权限点一律挂在**路由级**而不是分组级: 分组级会让"查看任务"与
@@ -159,6 +205,12 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	user.DELETE("/tasks/:id", onelink.RequirePerm(PermTaskDelete), h.DeleteTask)
 	user.POST("/tasks/:id/restore", onelink.RequirePerm(PermTaskRestore), h.RestoreTask)
 	user.POST("/tasks/:id/progress", onelink.RequirePerm(PermTaskUpdate), h.AddProgress)
+
+	// 里程碑(计划节点)。写用 PermTaskUpdate —— 与"改状态/加进展"同一套判据, 理由见
+	// task.go 里那一段; 读随详情页带出, 所以这里没有 GET。
+	user.POST("/tasks/:id/milestones", onelink.RequirePerm(PermTaskUpdate), h.AddMilestone)
+	user.PATCH("/tasks/:id/milestones/:mid", onelink.RequirePerm(PermTaskUpdate), h.UpdateMilestone)
+	user.DELETE("/tasks/:id/milestones/:mid", onelink.RequirePerm(PermTaskUpdate), h.DeleteMilestone)
 	user.GET("/tasks/:id/shares", onelink.RequirePerm(PermTaskList), h.ListShares)
 	user.POST("/tasks/:id/shares", onelink.RequirePerm(PermTaskShare), h.AddShare)
 	user.DELETE("/tasks/:id/shares/:shareId", onelink.RequirePerm(PermTaskShare), h.RevokeShare)

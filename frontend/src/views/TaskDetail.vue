@@ -73,34 +73,63 @@
               <el-button @click="showProgressDialog = true">
                 <el-icon><EditPen /></el-icon>添加进展
               </el-button>
+              <el-button @click="openMilestones">
+                <el-icon><Flag /></el-icon>设定里程碑
+              </el-button>
               <el-button @click="showReminderDialog = true">
                 <el-icon><Bell /></el-icon>设置提醒
               </el-button>
             </div>
           </el-card>
 
+          <!--
+            计划与进展合并成**一条**时间轴, 而不是两张并排的表。
+            用户要的是"方便比对", 而比对的动作是"这条计划对应的实际发生在什么时候" ——
+            分成两列之后, 那个动作要人在两个时间刻度之间来回换算, 那正是这个功能要消掉的工作。
+            蓝色是计划, 绿色是实际。
+          -->
           <el-card shadow="never" class="row">
-            <template #header>进展记录</template>
-            <el-timeline v-if="task.progresses?.length">
+            <template #header>
+              <div class="card-head">
+                <span>计划与进展</span>
+                <span v-if="milestoneSummary" class="card-head__note">{{ milestoneSummary }}</span>
+              </div>
+            </template>
+
+            <el-timeline v-if="timeline.length">
               <el-timeline-item
-                v-for="p in task.progresses"
-                :key="p.id"
-                :timestamp="formatDateTime(p.created_at)"
+                v-for="item in timeline"
+                :key="item.key"
+                :timestamp="formatDateTime(item.at)"
                 placement="top"
-                :type="timelineType(p.action)"
+                :type="item.kind === 'milestone' ? 'primary' : timelineType(item.raw.action)"
               >
-                <div class="progress-line">
-                  <el-tag size="small" effect="plain">{{ ACTION_LABELS[p.action] || p.action }}</el-tag>
-                  <el-tag v-if="p.progress != null" size="small" type="primary">进度 {{ p.progress }}%</el-tag>
-                  <span class="progress-user">{{ p.user_name }}</span>
-                </div>
-                <div v-if="p.comment" class="progress-comment">{{ p.comment }}</div>
-                <div v-if="p.old_status" class="progress-flow">
-                  状态：{{ statusLabel(p.old_status) }} → {{ statusLabel(p.new_status) }}
-                </div>
+                <template v-if="item.kind === 'milestone'">
+                  <div class="progress-line">
+                    <el-tag size="small" type="primary" effect="plain">计划</el-tag>
+                    <span class="ms-title">{{ item.raw.title }}</span>
+                    <el-tag size="small" :type="item.state.type" effect="plain">{{ item.state.label }}</el-tag>
+                  </div>
+                  <div v-if="item.raw.note" class="progress-comment">{{ item.raw.note }}</div>
+                </template>
+
+                <template v-else>
+                  <div class="progress-line">
+                    <el-tag size="small" type="success" effect="plain">实际</el-tag>
+                    <el-tag size="small" effect="plain">{{ ACTION_LABELS[item.raw.action] || item.raw.action }}</el-tag>
+                    <el-tag v-if="item.raw.progress != null" size="small" type="primary">
+                      进度 {{ item.raw.progress }}%
+                    </el-tag>
+                    <span class="progress-user">{{ item.raw.user_name }}</span>
+                  </div>
+                  <div v-if="item.raw.comment" class="progress-comment">{{ item.raw.comment }}</div>
+                  <div v-if="item.raw.old_status" class="progress-flow">
+                    状态：{{ statusLabel(item.raw.old_status) }} → {{ statusLabel(item.raw.new_status) }}
+                  </div>
+                </template>
               </el-timeline-item>
             </el-timeline>
-            <div v-else class="empty">暂无进展记录</div>
+            <div v-else class="empty">暂无计划与进展记录</div>
           </el-card>
         </el-col>
 
@@ -177,6 +206,72 @@
       </template>
     </el-dialog>
 
+    <!-- 设定里程碑 -->
+    <el-dialog v-model="showMilestoneDialog" title="设定里程碑" width="620px">
+      <p class="share-hint">
+        里程碑是这个任务的<b>计划</b>节点。它们会与进展记录合并成详情页上那条时间轴，
+        计划与实际差在哪里就在那里比 —— 所以这里只需要填"打算什么时候到哪一步"，
+        实际时间由进展记录自己带。
+      </p>
+
+      <div v-if="task?.milestones?.length" class="ms-list">
+        <div v-for="m in task.milestones" :key="m.id" class="ms-item">
+          <div class="ms-item__main">
+            <div class="ms-item__title">
+              {{ m.title }}
+              <el-tag size="small" :type="milestoneState(m).type" effect="plain">
+                {{ milestoneState(m).label }}
+              </el-tag>
+            </div>
+            <div class="ms-item__meta">
+              {{ formatDateTime(m.planned_at) }}
+              <span v-if="m.note"> · {{ m.note }}</span>
+            </div>
+          </div>
+          <el-button link size="small" @click="editMilestone(m)">编辑</el-button>
+          <el-popconfirm title="删除这个里程碑？" @confirm="removeMilestone(m)">
+            <template #reference>
+              <el-button link type="danger" size="small">删除</el-button>
+            </template>
+          </el-popconfirm>
+        </div>
+      </div>
+      <div v-else class="empty">还没有计划节点</div>
+
+      <el-divider content-position="left">
+        {{ milestoneForm.id ? '编辑节点' : '新增节点' }}
+      </el-divider>
+      <el-form label-width="80px">
+        <el-form-item label="节点名称">
+          <el-input
+            v-model="milestoneForm.title"
+            maxlength="128"
+            placeholder="如：需求评审、提测、上线"
+          />
+        </el-form-item>
+        <el-form-item label="计划时间">
+          <el-date-picker
+            v-model="milestoneForm.planned_at"
+            type="datetime"
+            placeholder="选择计划达成时间"
+            style="width: 100%"
+            value-format="YYYY-MM-DDTHH:mm:ss"
+          />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="milestoneForm.note" maxlength="500" placeholder="可选" />
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button v-if="milestoneForm.id" @click="resetMilestoneForm">取消编辑</el-button>
+        <el-button @click="showMilestoneDialog = false">关闭</el-button>
+        <el-button type="primary" :loading="savingMilestone" @click="submitMilestone">
+          {{ milestoneForm.id ? '保存修改' : '添加' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 设置提醒 -->
     <el-dialog v-model="showReminderDialog" title="设置任务提醒" width="480px">
       <el-form label-width="70px">
@@ -249,8 +344,118 @@ const shareEmail = ref('')
 const sharing = ref(false)
 const revokingId = ref(null)
 
+const showMilestoneDialog = ref(false)
+const savingMilestone = ref(false)
+// id 为 null 表示"在新增"。用一个表单同时承担新增与编辑, 而不是两个弹窗:
+// 两者的字段完全一样, 而分成两个地方之后,"为什么编辑时改不了计划时间"这类问题
+// 会变成要去比对两个表单的差异才能回答。
+const milestoneForm = reactive({ id: null, title: '', planned_at: '', note: '' })
+
 const progressForm = reactive({ status: '', progress: 0, comment: '' })
 const reminderForm = reactive({ remind_at: '', message: '' })
+
+// 计划与进展合并成一条按时间排好的轴。见模板里那段注释: 比对的动作是"这条计划对应的
+// 实际发生在什么时候", 而分两列摆着会把这个动作推给人。
+//
+// 并列时的次序由插入顺序决定(先计划后实际) —— Array.prototype.sort 是稳定排序,
+// 而"先看打算怎样, 再看实际怎样"正是读一条时间轴的自然顺序。
+const timeline = computed(() => {
+  const items = []
+  for (const m of task.value?.milestones || []) {
+    items.push({ key: `m${m.id}`, kind: 'milestone', at: m.planned_at, raw: m, state: milestoneState(m) })
+  }
+  for (const p of task.value?.progresses || []) {
+    items.push({ key: `p${p.id}`, kind: 'progress', at: p.created_at, raw: p })
+  }
+  return items.sort((a, b) => new Date(a.at) - new Date(b.at))
+})
+
+// 计划侧的一行小结语。只数"计划时间已经过去的节点", **不判断达成** ——
+// 达成与否是计划与进展比出来的结论, 服务端不替它下(见后端 TaskMilestoneOut 的注释),
+// 前端也不该替它下: 一个"已完成"的绿标会让人不再去看那条时间轴, 而时间轴才是这个功能。
+const milestoneSummary = computed(() => {
+  const list = task.value?.milestones || []
+  if (!list.length) return ''
+  const past = list.filter((m) => new Date(m.planned_at) < new Date()).length
+  return past ? `计划 ${list.length} 个节点 · ${past} 个已过期` : `计划 ${list.length} 个节点`
+})
+
+// 单个计划节点的状态。它是与**当前时刻**比出来的, 所以任务已完成时不再显示"已过期" ——
+// 那会是一句假警报: 计划已经收口了, 而"已过期"读起来像还有事没做。
+function milestoneState(m) {
+  if (task.value?.status === 'done') return { label: '任务已完成', type: 'info' }
+  const days = Math.ceil((new Date(m.planned_at) - new Date()) / 86400000)
+  if (days < 0) return { label: `已过期 ${-days} 天`, type: 'danger' }
+  if (days === 0) return { label: '今天', type: 'warning' }
+  if (days <= 3) return { label: `${days} 天后`, type: 'warning' }
+  return { label: `${days} 天后`, type: 'info' }
+}
+
+function openMilestones() {
+  resetMilestoneForm()
+  showMilestoneDialog.value = true
+}
+
+function editMilestone(m) {
+  Object.assign(milestoneForm, {
+    id: m.id,
+    title: m.title,
+    planned_at: m.planned_at,
+    note: m.note,
+  })
+}
+
+function resetMilestoneForm() {
+  Object.assign(milestoneForm, { id: null, title: '', planned_at: '', note: '' })
+}
+
+async function submitMilestone() {
+  if (!milestoneForm.title.trim()) {
+    ElMessage.warning('请填写节点名称')
+    return
+  }
+  if (!milestoneForm.planned_at) {
+    ElMessage.warning('请选择计划时间')
+    return
+  }
+  savingMilestone.value = true
+  const payload = {
+    title: milestoneForm.title,
+    planned_at: milestoneForm.planned_at,
+    note: milestoneForm.note,
+  }
+  try {
+    if (milestoneForm.id) {
+      await taskApi.updateMilestone(task.value.id, milestoneForm.id, payload)
+    } else {
+      await taskApi.addMilestone(task.value.id, payload)
+    }
+    ElMessage.success('已保存')
+    resetMilestoneForm()
+    // 回读而不是把响应拼进本地数组: 合并时间轴要重排, 而"计划时间"是排序键 ——
+    // 在本地插一条会让顺序在一个不显眼的地方出错。
+    await load()
+  } catch {
+    /* 拦截器已提示，保持表单内容以便修改后重试 */
+  } finally {
+    savingMilestone.value = false
+  }
+}
+
+async function removeMilestone(m) {
+  try {
+    await taskApi.removeMilestone(task.value.id, m.id)
+    ElMessage.success('已删除')
+    // 正在编辑的那一条被删了就把表单退回"新增", 否则接下来那一次保存会去 PATCH 一个
+    // 已经不存在的 id, 而用户看到的是"保存失败"却不知道原因。
+    if (milestoneForm.id === m.id) {
+      resetMilestoneForm()
+    }
+    await load()
+  } catch {
+    /* 拦截器已提示 */
+  }
+}
 
 watch(showProgressDialog, (visible) => {
   if (visible && task.value) {
@@ -482,6 +687,52 @@ onMounted(() => {
   color: #9ca3af;
   text-align: center;
   padding: 24px 0;
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.card-head__note {
+  font-size: 12px;
+  font-weight: 400;
+  color: #9ca3af;
+}
+.ms-title {
+  font-weight: 600;
+  color: #111827;
+}
+.ms-list {
+  display: flex;
+  flex-direction: column;
+}
+.ms-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+.ms-item__main {
+  flex: 1;
+  min-width: 0;
+}
+.ms-item__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+}
+.ms-item__meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .reminder-item {
   padding: 8px 0;

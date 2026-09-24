@@ -31,6 +31,26 @@ type Config struct {
 	// OnelinkAliveInterval 多久回平台问一次会话存活。它直接决定单点登出的可感知滞后:
 	// 平台登出后, 躬行最多滞后一个周期才跟着下线。SDK 的下限是 5 秒, 默认 60 秒。
 	OnelinkAliveInterval time.Duration
+	// OnelinkPermPullPath 权限清单端点挂在哪条路径上, 默认 /onelink/perm-manifest。
+	//
+	// 平台侧那个"权限清单拉取地址"要与之对齐: 平台按登记的地址来取, 而这个地址由运维
+	// 填进管理台 —— 两边不一致的表现是平台侧一句"拉取失败", 看不出是路径写错了还是
+	// 签名没过。所以它在启动日志里会打出来(见 cmd/server)。
+	//
+	// 它必须在**登录守卫之外**(调用方是平台, 那里没有会话), 而它的守卫是平台签名,
+	// 由 SDK 的 NewPermPullHandler 一并给出 —— 见 handler.RegisterRoutes。
+	OnelinkPermPullPath string
+	// OnelinkUnreadPath 用户态(未读数)端点挂在哪条路径上, 默认 /onelink/unread。
+	//
+	// 与 OnelinkPermPullPath 同一个方向(平台的服务端进程主动请求), 差别在被问的对象:
+	// 那个问"躬行有哪些权限点"(机器身份), 这个问"**某个人**在躬行有多少未读提醒"。因此
+	// 平台会带上会话里的 userId 来请求它, 并把它签进签名串 —— 见 SDK 的 NewUnreadHandler。
+	//
+	// 它同样必须在**登录守卫之外**(调用方是平台, 那里没有会话), 而它的守卫也是平台签名。
+	// 管理台上那个"未读数拉取地址"要与之对齐, 所以它在启动日志里也会打出来(见 cmd/server)。
+	//
+	// 留空则不挂这条路由: 那时门户上躬行这张卡片不显示角标(而**不是**显示 0)。
+	OnelinkUnreadPath string
 
 	DatabaseURL string
 
@@ -92,6 +112,8 @@ func Load() *Config {
 		OnelinkPortalURL:     getEnv("ONELINK_PORTAL_URL", ""),
 		OnelinkAppSecret:     getEnv("ONELINK_APP_SECRET", ""),
 		OnelinkAliveInterval: secondsEnv("ONELINK_ALIVE_INTERVAL_SECONDS", 60),
+		OnelinkPermPullPath:  getEnv("ONELINK_PERM_PULL_PATH", "/onelink/perm-manifest"),
+		OnelinkUnreadPath:    getEnv("ONELINK_UNREAD_PATH", "/onelink/unread"),
 
 		AppBaseURL: getEnv("APP_BASE_URL", "http://localhost:5173"),
 		UploadDir:  getEnv("UPLOAD_DIR", "./uploads"),
@@ -153,6 +175,29 @@ func (c *Config) validate() error {
 	}
 	if c.MaxBodyBytes <= 0 {
 		return fmt.Errorf("MAX_BODY_BYTES 必须为正数")
+	}
+	// 两条入站端点的路径规则相同, 所以放在一张表里一起判 —— 各写一份的结果是后加的那份
+	// 少判一条, 而少判的那一条恰好是"没人会去补"的那条。
+	//
+	// 规则一: 必须是绝对路径。gin 对 "onelink/perm-manifest" 这种相对模式会 panic, 而那个
+	// panic 发生在启动之后、且信息里只有模式串 —— 在这里拒掉能点名变量。
+	// 规则二: 不以 / 结尾。gin 会把 /a/ 注册成一棵子树, 于是 /a/b 也会命中同一个 handler,
+	// 而"多出来的那条路径"没有任何东西在看着它。
+	for _, p := range []struct{ env, val string }{
+		{"ONELINK_PERM_PULL_PATH", c.OnelinkPermPullPath},
+		{"ONELINK_UNREAD_PATH", c.OnelinkUnreadPath},
+	} {
+		if p.val == "" {
+			continue
+		}
+		if !strings.HasPrefix(p.val, "/") || strings.HasSuffix(p.val, "/") {
+			return fmt.Errorf("%s 必须是 / 开头且不以 / 结尾的绝对路径(当前 %q)", p.env, p.val)
+		}
+	}
+	// 两条端点不能挂同一个路径: gin 会让后注册的那条覆盖前一条, 而现象是平台点"拉取权限点"
+	// 时拿到一份未读数对象(或反过来)。那时两侧的报错都是"响应不合法", 没有一个字指向配置。
+	if c.OnelinkPermPullPath != "" && c.OnelinkPermPullPath == c.OnelinkUnreadPath {
+		return fmt.Errorf("ONELINK_UNREAD_PATH 与 ONELINK_PERM_PULL_PATH 不能相同(都是 %q)", c.OnelinkUnreadPath)
 	}
 	// CORS 的通配与会话 cookie 不能共存(浏览器不接受带凭据的通配响应), 而它的现象是
 	// "跨域登录静默不生效"。生产环境直接拒绝, 开发环境交给 middleware.CORS 出声。

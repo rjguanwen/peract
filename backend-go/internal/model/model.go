@@ -92,6 +92,30 @@ func (t *Task) ComputeOverdue() {
 	t.IsOverdue = t.DueDate != nil && t.Status != "done" && t.DueDate.Before(time.Now())
 }
 
+// TaskMilestone 任务的里程碑 —— 计划节点。
+//
+// 它是**计划**那一半: 只记"打算什么时候到哪一步", 不记"实际什么时候到的"。
+// 实际那一半已经在 TaskProgress 里了, 而用户要看的正是这两串**并排**(见前端详情页的
+// 合并时间轴)。再往这里抄一份"实际完成时间"的代价是两份真值: 里程碑上的日期与进展记录
+// 里的时间戳一旦不一致, 没有任何一方能判断哪个对, 而界面上会同时显示两个不同的日期。
+//
+// 一个任务只有几个关键节点(上限见 handler.maxMilestonesPerTask), 所以这张表不需要分页,
+// 也没有逻辑删除 —— 删一个计划节点就是把它从计划里拿掉, 留一行"已删除的里程碑"没有任何
+// 读者(对比 Task 的逻辑删除: 那里有回收站这个明确的读者)。
+type TaskMilestone struct {
+	ID     uint `gorm:"primaryKey" json:"id"`
+	TaskID uint `gorm:"index;index:idx_milestone_task_planned,priority:1" json:"task_id"`
+	// Title 节点名。用自由文本而不是枚举: 每个任务的节点都不一样("需求评审"/"提测"/"上线"),
+	// 而枚举一旦定死, 第一个不在枚举里的节点就会变成"其他"。
+	Title string `gorm:"size:128" json:"title"`
+	// PlannedAt 计划达成时间。这个功能存在的全部理由就是这一列。
+	// 复合索引的第二段: 详情页唯一的读法是"按计划时间升序取这个任务的节点"。
+	PlannedAt DateTime  `gorm:"index:idx_milestone_task_planned,priority:2" json:"planned_at"`
+	Note      string    `gorm:"size:500" json:"note"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // TaskProgress 任务进展记录
 type TaskProgress struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`

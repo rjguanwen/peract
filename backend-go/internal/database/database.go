@@ -98,6 +98,7 @@ func Migrate(db *gorm.DB) error {
 		&model.User{},
 		&model.Task{},
 		&model.TaskProgress{},
+		&model.TaskMilestone{},
 		&model.Reminder{},
 		&model.SystemSetting{},
 		&model.TaskShare{},

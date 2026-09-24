@@ -27,7 +27,12 @@
 
 - **会话是 cookie, 不是前端持有的令牌。** 前端 `stores/auth.js` 里连一个 token 字段都没有 —— 而这是有意的：凭据进了 localStorage 就等于交给每一个 XSS。
 - **账号与口令在平台上。** 改密、找回、锁定、验证码都在门户；躬行的库里没有口令哈希（历史列还在，但没有写入方，见 `model.User` 的注释）。
-- **权限点必须登记在 OneLink 上。** 归属是 `task-system` 这个应用，清单见 `deploy/perms.manifest.json`（人读 + `onelinkctl` 校验）与 `deploy/seed-perms.sql`（落库）。**不要**用 `POST /api/v1/admin/permissions` 登记 —— 那一条的归属取自会话（在门户里就是平台自己），建出来的行全落在 `app_id=1` 下，现象是"权限点在管理台看得见、应用里按钮不出现、且不出现的那一侧没有任何报错"。正确入口是应用作用域路由 `POST /api/v1/admin/apps/:id/permissions`，或这份种子 SQL。
+- **权限点必须登记在 OneLink 上。** 归属是 `task-system` 这个应用，清单见 `deploy/perms.manifest.json`（人读 + `onelinkctl` 校验）与 `deploy/seed-perms.sql`（落库）。**不要**用 `POST /api/v1/admin/permissions` 登记 —— 那一条的归属取自会话（在门户里就是平台自己），建出来的行全落在 `app_id=1` 下，现象是"权限点在管理台看得见、应用里按钮不出现、且不出现的那一侧没有任何报错"。正确入口有三个，按推荐顺序：
+  1. **应用上报**（持续集成用）：`go run ./cmd/perm-sync` —— 它把 `deploy/perms.manifest.json` 提交给 `POST /open/v1/permissions/sync`，用 `ONELINK_APP_SECRET` 验签，**不需要任何人的令牌**。写出来的行 `sync_source='sdk'`，管理台对它们只读（下一次同步会覆盖平台侧的改动，所以干脆改不动）。加 `-dry-run` 只解析不联网。
+  2. **应用作用域路由** `POST /api/v1/admin/apps/:id/permissions`（需要一个平台超管的会话）。
+  3. **种子 SQL** `deploy/seed-perms.sql`（兜底）。
+
+  三条路写的是同一批权限点，**分叉之后两边都不报错**（管理台上看到的是种子那批，应用上报的是另一批），所以改一处必须同时改另外两处 —— `onelinkctl perm-export` 的校验就是为了在提交前发现这种分叉。
 - **角色的载体是平台的角色授权**（`sys_user_role.app_id`），应用侧没有 role 字段。给一个人授权是三步：建角色 → 勾权限点 → 把角色授给他；第三步最容易漏，少了它"角色建好了、权限勾上了、保存也成功，而那个人进去什么都没有"。
 - **权限码分两类**：`M`（菜单）决定前端摆不摆入口，`B`（按钮/接口）是服务端 `RequirePerm` 的判据。两者的清单必须逐字对齐（`deploy/*` ↔ `internal/handler/handler.go` 顶部常量 ↔ `frontend/src/utils/menu.js` 与 `router/index.js`）。
 
@@ -102,8 +107,14 @@ npm run dev
 | `TRUSTED_PROXIES` | 空 | 放在 Nginx 之后**必须**填写，否则来源 IP 可被伪造 `X-Forwarded-For` 改写 |
 | `CORS_ALLOW_ORIGINS` | `http://localhost:5177` | **不要用 `*`**：会话是凭据型 cookie，浏览器不会在带凭据的跨域请求上接受通配来源，跨域登录会静默失败 |
 
-前端另有一个构建期变量 `VITE_ONELINK_PORTAL_URL`（门户地址，会话失效时跳转用）。
-它**不是**密钥，但必须与后端的 `ONELINK_PORTAL_URL` 指向同一个门户。
+前端另有自己的旋钮, 配置项与说明见 `frontend/.env.example`（复制成 `frontend/.env` 生效）：
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `VITE_ONELINK_PORTAL_URL` | `http://127.0.0.1:5173` | 门户地址，会话失效时跳转用。**不是**密钥，但必须与后端的 `ONELINK_PORTAL_URL` 指向同一个门户；留空则只提示、不跳转 |
+| `VITE_BACKEND_PORT` | `8001` | 只影响 dev server 的代理目标（`/api`、`/sso`、`/logout`），不影响生产构建 |
+
+只有 `VITE_` 前缀的变量会进浏览器产物 —— 所以那个文件里**只放公开的部署拓扑**，密钥一律留在后端。
 
 ### 数据库
 
@@ -210,6 +221,7 @@ DATABASE_URL=file:/data/task.db     # 直接透传给驱动
 task-system/
 ├── backend-go/            # Go 后端（Gin，端口 8001）
 │   ├── cmd/server/        # 入口（OneLink 装配 + 优雅停机）
+│   ├── cmd/perm-sync/     # 权限点上报（CI 用，把 deploy/perms.manifest.json 推给平台）
 │   ├── internal/
 │   │   ├── config/        # 环境变量加载与校验
 │   │   ├── database/      # SQLite 连接、PRAGMA、迁移
@@ -258,7 +270,9 @@ SDK 自己的用例覆盖。跳过的是"会话最初怎么来的"，守卫之�
 
 - 设置 `APP_ENV=production`，并配齐 `ONELINK_BASE_URL` / `ONELINK_PORTAL_URL` / `ONELINK_APP_SECRET`
   （缺任何一项都会拒绝启动 —— 起得来但谁都进不去比起不来更难排查）
-- 在 OneLink 里登记 `deploy/perms.manifest.json` 里的权限点，并给使用者授角色
+- 在 OneLink 里登记 `deploy/perms.manifest.json` 里的权限点（推荐在发布流程里跑一次
+  `cd backend-go && go run ./cmd/perm-sync`，它用应用密钥验签，不需要人的令牌），并给使用者授角色。
+  **上报只登记权限点，不授权** —— 新上线的功能码不会自动进任何角色
 - **不要**给 `CORS_ALLOW_ORIGINS` 配 `*`：会话是凭据型 cookie，浏览器不会在带凭据的跨域请求上
   接受通配来源，跨域登录会静默失败（生产环境会直接拒绝启动）
 - 正确配置 `TRUSTED_PROXIES`，否则来源 IP 可被伪造 `X-Forwarded-For` 改写
